@@ -1,0 +1,90 @@
+# ori-infra — Caddy edge
+#
+# This file is the STATIC scaffolding for the edge. It terminates TLS for every
+# public ori hostname and owns the on-demand certificate gate. The per-ori
+# routing (which hostname -> which ori:port, plus the _token forward_auth gate)
+# is NOT static: hostnames and targets only exist once a ori registers a route,
+# so the control plane injects them as JSON routes through the Caddy admin API
+# at runtime. See edge-routes.md for the exact route object and API calls.
+#
+# Environment variables used here are supplied by /etc/caddy/edge.env (see
+# infra/systemd/caddy.service.d/edge.conf and infra/env/caddy.env.example).
+# Caddy requires the --environ flag to substitute {env.VAR}; the packaged
+# Debian/Ubuntu caddy.service already passes it.
+{
+	# The admin API must be reachable only on this host: the control plane adds
+	# and removes ori routes through it. Never expose it beyond loopback. This
+	# also overrides CADDY_ADMIN so no stray env var can accidentally open it.
+	admin localhost:2019
+
+	# On-demand TLS: before issuing ANY certificate Caddy asks the control plane
+	# whether the hostname exists in the port_routes table. If the endpoint
+	# answers 2xx, the certificate may be issued; anything else aborts the TLS
+	# handshake. Caddy reads ONLY the status code (source-verified). It appends
+	# ?domain=<hostname> to the ask URL. 10s timeout, no redirects.
+	#
+	# ponytail: /internal/edge/ask is NOT defined in section 5 of the plan.
+	# It is one of two control-plane endpoints this edge needs and the plan did
+	# not name (the other is the token gate: /internal/edge/validate in
+	# edge-routes.md). The control plane must implement it: a constant-time
+	# indexed lookup of the hostname in port_routes returning 2xx iff present.
+	on_demand_tls {
+		ask {env.CONTROL_PLANE_BASE}/internal/edge/ask
+	}
+
+	# default logger: JSON to the journal (stderr).
+	log {
+		output stderr
+		format json
+	}
+
+	# Connection-level timeouts for the edge. Hosted ori services can stream for
+	# a while (VNC, file downloads) so write is generous; header/read caps keep
+	# slowloris from holding connections open.
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 10s
+			write 2m
+			idle 10m
+		}
+	}
+}
+
+# Catch-all HTTPS site. Deliberately NO host matcher, for two reasons.
+#
+# 1. `{env.VAR}` is NOT substituted in a site address. `https://*.on.{env.EDGE_DOMAIN}`
+#    reaches the TLS layer with the braces still literal and Caddy refuses to adapt:
+#    "subject does not qualify for certificate: '*.on.{env.EDGE_DOMAIN}'". Verified with
+#    `caddy validate` on Linux -- a hardcoded `*.on.ori.local` adapts fine, the env form
+#    never does. Do not reintroduce an env placeholder here. If you want the domain
+#    pinned in the address, template this file during bootstrap instead.
+# 2. The authority on which hostnames are legitimate is the port_routes table, consulted
+#    through the on_demand `ask` endpoint above -- not a glob in this file. A wildcard
+#    address would encode that rule in a second place and let the two drift apart.
+#
+# So any hostname may arrive, and a certificate is issued only if `ask` confirms it is a
+# live route. That makes `ask` load-bearing: it is unauthenticated and it drives
+# certificate issuance, so it must be rate-limited (§5 of the plan).
+#
+# Per-hostname routing to <ori-ip>:<port>, plus the _token forward_auth gate, is injected
+# by the control plane as JSON routes at index 0 of server srv0 so they run before this
+# block (edge-routes.md). What reaches here is a hostname holding a cached certificate but
+# no registered route -- a stopped ori whose route was torn down -- hence the 404.
+#
+# ponytail ceiling: with EDGE_DOMAIN=ori.local there is no public DNS, so the default ACME
+# issuers cannot validate anything. Offline dev should use `tls internal`; production
+# points real DNS at this host. Local-only work never exercises issuance.
+https:// {
+	tls {
+		on_demand
+	}
+
+	# JSON access logs for ori traffic. The default logger (configured above as
+	# JSON to stderr) carries access entries when a site uses the `log` directive.
+	log {
+		format json
+	}
+
+	respond "no such ori" 404
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@ori/cli",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "bin": { "ori": "./src/index.ts" }
+}

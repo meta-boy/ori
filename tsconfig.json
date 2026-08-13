@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "esnext",
+    "lib": ["esnext", "dom"],
+    "types": ["bun"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": false,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@ori/contract": ["./packages/contract/src/index.ts"],
+      "@ori/api": ["./packages/api/src/index.ts"],
+      "@ori/api/*": ["./packages/api/src/*.ts"],
+      "@ori/guest-agent": ["./packages/guest-agent/src/index.ts"],
+      "@ori/cli": ["./packages/cli/src/index.ts"],
+      "@ori/sdk-ts": ["./packages/sdk-ts/src/index.ts"],
+      "@ori/guest-agent/*": ["./packages/guest-agent/src/*.ts"]
+    }
+  },
+  "include": ["packages/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["packages/dashboard/**"]
+}

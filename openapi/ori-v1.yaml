@@ -1,0 +1,2244 @@
+openapi: 3.1.0
+info:
+  title: Ori Public API v1
+  version: 1.0.0
+  description: |
+    Public JSON API for creating, operating, prompting, observing, and exposing Ori sandboxes from backend services, CI jobs, hosted workers, and Ori automation products.
+
+    The v1 reference intentionally documents the developer integration surface only. Dashboard billing actions are not part of v1.
+servers:
+  - url: https://ori.example.com/api/ori/v1
+security:
+  - OriBearerAuth: []
+tags:
+  - name: Ori
+    description: Unified Ori account, setup, lifecycle, prompting, event history, desktop access, and SSH operations.
+components:
+  securitySchemes:
+    OriBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: ori_api_key
+      description: Ori bearer token in the form `ori_...`. Service API keys authenticate Ori operations.
+  parameters:
+    OriId:
+      name: oriId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^or_[23456789abcdefghjkmnpqrstuvwxyz]{8}$'
+      description: Public Ori id returned by create/list/get ori calls.
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      description: Maximum items to return.
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: [string, 'null'] }
+      description: Opaque pagination cursor returned as `pageInfo.nextCursor`.
+    Sort:
+      name: sort
+      in: query
+      schema: { type: string, enum: [asc, desc], default: desc }
+      description: Sort direction for cursor pagination.
+    SnapshotId:
+      name: snapshotId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Snapshot id returned by the snapshot list/latest calls.
+  schemas:
+    SuccessBase:
+      type: object
+      required: [ok, type]
+      properties:
+        ok:
+          type: boolean
+          examples: [true]
+        type:
+          type: string
+          description: Stable success envelope discriminator added by v1.
+    ErrorEnvelope:
+      type: object
+      required: [ok, type, status, code, message, error, requestId]
+      properties:
+        ok:
+          type: boolean
+          examples: [false]
+        type:
+          type: string
+          examples: [ori.error]
+        status:
+          type: integer
+          examples: [409]
+        code:
+          type: string
+          examples: [provider_not_configured]
+        message:
+          type: string
+          examples: [Prompting is locked until Codex is configured on the Agents page.]
+        requestId:
+          type: string
+          examples: [req_01HX...]
+        error:
+          type: object
+          required: [code, message, status]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            status:
+              type: integer
+            details:
+              type: object
+              additionalProperties: true
+    Ori:
+      type: object
+      required: [id, name, state, desktopAvailable, snapshotAvailable]
+      properties:
+        id:
+          type: string
+          pattern: '^or_[23456789abcdefghjkmnpqrstuvwxyz]{8}$'
+          examples: [or_23456789]
+        name:
+          type: string
+          examples: [Ori 2026-05-31 12:00]
+        state:
+          type: string
+          enum: [init, provisioning, provisioned, cloning, ready, idle, running, archiving, archived, error]
+        type:
+          type: string
+          enum: [small, default, large, bare-metal]
+          description: Machine size this ori was created with. Fixed for the life of the ori.
+        vcpu:
+          type: integer
+          description: vCPUs guaranteed by this ori's type.
+          examples: [4]
+        memoryGB:
+          type: integer
+          description: RAM in GB guaranteed by this ori's type.
+          examples: [8]
+        billingMultiplier:
+          type: number
+          description: Rate at which this ori consumes machine time. 0.5 for `small`, 1 for `default`, 2 for `large`.
+          examples: [1]
+        url:
+          type: [string, 'null']
+          format: uri
+          description: Machine URL when assigned.
+        ip:
+          type: [string, 'null']
+          description: Machine IPv4 address when assigned.
+        createdAt:
+          type: [string, 'null']
+          format: date-time
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+        archiveAfter:
+          type: [string, 'null']
+          format: date-time
+          description: Automatic archival time, or null when auto-stop is disabled.
+        desktopAvailable:
+          type: boolean
+        desktopUrl:
+          type: [string, 'null']
+          format: uri
+          description: Secret-bearing desktop stream URL when available. Redact from logs.
+        snapshotAvailable:
+          type: boolean
+        snapshotCompletedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Timestamp of the most recent successfully completed snapshot, or null.
+        subdomain:
+          type: [string, 'null']
+          description: The ori's stable three-word subdomain slug (e.g. "frazil-pneuma-rallye"), or null before one is assigned.
+        lastSnapshotAttemptAt:
+          type: [string, 'null']
+          format: date-time
+          description: Timestamp of the most recent snapshot attempt of any status (queued, in_progress, completed, failed, cancelled), or null. Use with snapshotCompletedAt to detect snapshots that keep failing.
+        lastSnapshotStatus:
+          type: [string, 'null']
+          enum: [queued, in_progress, completed, failed, cancelled, null]
+          description: Status of the most recent snapshot attempt, or null if none. A value other than completed while snapshotCompletedAt stays stale indicates failing snapshots.
+    ApiKey:
+      type: object
+      required: [id, name, keyPrefix, keyLastFour, createdAt]
+      properties:
+        id:
+          type: string
+          examples: [sak_123]
+        name:
+          type: string
+          examples: [Production worker]
+        keyPrefix:
+          type: string
+          examples: [ori_live]
+        keyLastFour:
+          type: string
+          examples: [9abc]
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: [string, 'null']
+          format: date-time
+    Repository:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: integer
+          description: GitHub repository id.
+        databaseId:
+          type: string
+          description: Internal repository id used when selecting repositories.
+        name:
+          type: string
+        fullName:
+          type: string
+          examples: [acme/web]
+        private:
+          type: boolean
+        permissions:
+          type: string
+        pushedAt:
+          type: [string, 'null']
+          format: date-time
+    SelectedRepository:
+      allOf:
+        - $ref: '#/components/schemas/Repository'
+        - type: object
+          properties:
+            baseBranch:
+              type: string
+              examples: [main]
+            setupRoutineId:
+              type: [string, 'null']
+            setupScript:
+              type: string
+            setupBlocking:
+              type: boolean
+            preCommitHooks:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  script:
+                    type: string
+                  blocking:
+                    type: boolean
+    RepositoryInstallation:
+      type: object
+      properties:
+        type:
+          type: string
+          examples: [Organization]
+        accountLogin:
+          type: string
+          examples: [acme]
+        accountAvatarUrl:
+          type: [string, 'null']
+          format: uri
+        repositories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Repository'
+    SecretFile:
+      type: object
+      required: [path, contents]
+      properties:
+        path:
+          type: string
+          examples: [.config/service-account.json]
+        contents:
+          type: string
+          description: Secret file contents. Treat as sensitive.
+    LimitsFields:
+      type: object
+      required: [activeOris, maxActiveOris, canStart, billingStatus]
+      additionalProperties: true
+      properties:
+        accessTier:
+          type: string
+          examples: [trial]
+        blockedReason:
+          type: [string, 'null']
+        currentLimits:
+          type: object
+          additionalProperties: true
+          properties:
+            activeOris: { type: integer }
+            creationRatePerMinute: { type: integer }
+            creationRequestsPerDay: { type: [integer, 'null'] }
+        standardLimits:
+          type: object
+          additionalProperties: true
+          properties:
+            activeOris: { type: integer }
+            creationRatePerMinute: { type: integer }
+            creationRequestsPerDay: { type: [integer, 'null'] }
+        trialLimits:
+          type: object
+          additionalProperties: true
+          properties:
+            activeOris: { type: integer }
+            creationRatePerMinute: { type: integer }
+            creationRequestsPerDay: { type: [integer, 'null'] }
+        upgradeEffects:
+          type: object
+          additionalProperties: true
+        canStart:
+          type: boolean
+          description: Whether the authenticated account can create or operate oris right now.
+        checkoutRequired:
+          type: boolean
+        startBlockedReason:
+          type: [string, 'null']
+        contactMessage:
+          type: [string, 'null']
+        activeOris:
+          type: integer
+        activeStates:
+          type: array
+          items:
+            type: string
+        maxActiveOris:
+          type: integer
+        maxCreationRequestsPerMinute:
+          type: integer
+        maxCreationRequestsPerDay:
+          type: [integer, 'null']
+        hasPaymentHistory:
+          type: boolean
+        package:
+          type: object
+          additionalProperties: true
+        subscriptionQuotaSeconds:
+          type: integer
+        subscriptionRemainingSeconds:
+          type: integer
+        packBalanceSeconds:
+          type: integer
+        creditPurchasedSeconds:
+          type: integer
+        creditUsedSeconds:
+          type: integer
+        liveUsageSeconds:
+          type: integer
+        creditSecondsPerDollar:
+          type: integer
+        billingStatus:
+          type: string
+          description: Account access state returned by the current backend. Billing endpoints are not part of v1.
+        subscriptionStatus:
+          type: [string, 'null']
+        subscriptionCancelAtPeriodEnd:
+          type: boolean
+        hasSubscription:
+          type: boolean
+        subscriptionTrialEndsAt:
+          type: [string, 'null']
+          format: date-time
+        subscriptionCurrentPeriodEnd:
+          type: [string, 'null']
+          format: date-time
+        creditBalanceSeconds:
+          type: integer
+    CreateOriRequest:
+      type: object
+      description: Options for provisioning a new cloud computer.
+      properties:
+        type:
+          type: string
+          enum: [small, default, large]
+          default: default
+          description: >-
+            Machine size. `small` is 2 vCPUs / 4 GB RAM and consumes machine time at half rate;
+            `default` is 4 vCPUs / 8 GB RAM; `large` is 8 vCPUs / 16 GB RAM and consumes machine
+            time twice as fast (see the Billing guide). A ori keeps its type for
+            life: stopping, resuming and forking all preserve it, and forks inherit the source
+            ori's type.
+        ttlSeconds:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 2592000
+            - type: 'null'
+          default: 3600
+          description: Number of seconds before automatic archival. `null` disables auto-stop. The backend also accepts the string `infinite` for legacy compatibility; new clients should send null.
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            Per-ori environment variables injected into the ori's tool environment, on top of the
+            account environment's variables (per-ori values win on conflicts). Keys must match
+            `[A-Za-z_][A-Za-z0-9_]{0,127}`; at most 100 variables and 64KB total. Reserved names
+            (`ORI_ID`, `ORI_AGENT_TOKEN`, `ORI_MACHINE_TOKEN`, `ORI_CONTROL_PLANE`,
+            `ORI_CLI_TOKEN`) are rejected with `invalid_env`. Forked oris
+            inherit the source ori's env unless the fork request supplies its own `env`.
+        noEnv:
+          type: boolean
+          default: false
+          description: >-
+            Create a ori with none of the secrets attached to your account (no environment
+            variables, secret files, or credentials), confined to itself so it cannot act on your
+            account or other oris. For oris you give to your own users. SSH, SCP, desktop,
+            snapshots, and public URLs still work; pass `env` to give the ori a secret of its own.
+            A fork of a no-env ori is always no-env.
+      examples:
+        - ttlSeconds: 3600
+        - ttlSeconds: null
+        - type: large
+          ttlSeconds: 3600
+        - ttlSeconds: 3600
+          env:
+            DATABASE_URL: postgres://user:pass@host:5432/app
+            FEATURE_FLAG: "1"
+        - ttlSeconds: null
+          noEnv: true
+    StopRequest:
+      type: object
+      description: Options for stopping a Ori.
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: >-
+            Stop the ori even if its disk cannot be snapshotted. Everything written
+            since the last successful snapshot is permanently LOST. Without this, a ori
+            whose snapshot pipeline is failing is left running rather than discarding
+            your work, and you are not billed for that time. Only use this after a stop
+            has already been refused.
+    ResumeRequest:
+      type: object
+      description: Options for resuming a stopped Ori.
+      properties:
+        type:
+          type: string
+          enum: [small, default, large]
+          description: >-
+            Resume onto a different machine size. Omit to keep the ori's current type.
+            A resume already restores onto a fresh machine, so changing size costs nothing
+            extra. Shrinking is rejected with `type_too_small` when the ori's data would
+            not fit the smaller disk.
+        noEnv:
+          type: boolean
+          description: >-
+            Resume into a no-env ori: withhold account secrets and scrub inherited owner
+            secrets from the restored snapshot before the ori is exposed. One-way; once a
+            ori is resumed as no-env it stays no-env on later resumes.
+    UpdateOriRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: New display name. Empty strings are rejected; longer names are truncated to 120 chars by the backend.
+        ttlSeconds:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 2592000
+            - type: 'null'
+          description: New archival TTL. `null` disables auto-stop.
+        subdomain:
+          type: string
+          minLength: 3
+          maxLength: 40
+          pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+          description: >-
+            Rename the Ori's stable subdomain (the `<subdomain>.on.example.com` label).
+            Lowercase letters, digits and hyphens; no leading/trailing/double hyphens;
+            cannot end in `-desktop` or `-<number>` (reserved for the desktop and
+            hosted-port URLs). Must be globally unique. The base URL, desktop URL and
+            every live `host <port>` URL are re-pointed to the new name with no
+            downtime and their access tokens preserved; the old URLs stop resolving.
+            On a transient routing error the rename is saved but returns 502
+            `gateway_error` - retry with the same value to finish activating routes.
+      examples:
+        - name: Customer support run
+          ttlSeconds: 7200
+        - subdomain: acme-staging
+    PromptRequest:
+      type: object
+      description: |
+        Work item to queue inside an existing Ori. Provider credentials must already be configured in the Ori dashboard.
+
+        Provider values: `codex`, `claude-code`; the backend currently also accepts `claude` as an alias for `claude-code`.
+
+        Recommended model ids come from `backend/models.json`: Codex `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`; Claude Code `claude-fable-5`, `opus`, `sonnet`, `haiku`. If omitted, the user's saved provider default is used.
+      required: [provider, prompt]
+      properties:
+        provider:
+          type: string
+          enum: [codex, claude-code, claude]
+        model:
+          type: [string, 'null']
+          description: Optional provider model id. Prefer the documented ids; unknown explicit ids are currently forwarded rather than rejected by request validation.
+          examples: [gpt-5.4, claude-fable-5, sonnet]
+        reasoningEffort:
+          type: [string, 'null']
+          description: Optional reasoning effort. Codex supports `none`, `low`, `medium`, `high`, `xhigh` for GPT-5.4/5.5/5.4-mini and `low`, `medium`, `high`, `xhigh` for GPT-5.3 Codex. Claude `claude-fable-5` and `opus` support `low`, `medium`, `high`, `max`; `sonnet` supports `low`, `medium`, `high`; `haiku` has no reasoning control.
+          examples: [medium]
+        prompt:
+          type: string
+          minLength: 1
+          description: Natural-language task for the Ori, including repo, preview, or browser-use instructions.
+      examples:
+        - provider: codex
+          model: gpt-5.4
+          reasoningEffort: medium
+          prompt: Work on the selected repo, run tests, fix failures, commit the result, and report any hosted preview URL.
+    RepoSelectionRequest:
+      type: object
+      required: [repositoryId]
+      description: Idempotently selects a repository for future Oris. If the repository is already selected, the API updates its base branch instead of returning a conflict.
+      properties:
+        repositoryId:
+          type: string
+          description: Internal repository `databaseId` returned by `GET /repos`.
+        baseBranch:
+          type: string
+          default: main
+      examples:
+        - repositoryId: repo_org_123
+          baseBranch: dev
+    SecretsUpdateRequest:
+      type: object
+      description: Full replacement for the Ori secret setup. Omitted `envContents` or `secretFiles` are treated as empty values, and successful updates are pushed to active Oris.
+      properties:
+        envContents:
+          type: string
+          description: Full .env-style content to sync into Oris. Send the complete desired file contents, not a patch.
+        secretFiles:
+          type: array
+          description: Full list of secret files to keep configured. Send existing files again if they should remain.
+          items:
+            $ref: '#/components/schemas/SecretFile'
+      examples:
+        - envContents: "OPENAI_API_KEY=sk-...\nDATABASE_URL=postgres://..."
+          secretFiles:
+            - path: .config/service-account.json
+              contents: '{"type":"service_account"}'
+    SshKeyRequest:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          description: Public SSH key in OpenSSH format. Private keys are rejected.
+          examples: [ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... user@host]
+    DesktopRequest:
+      type: object
+      additionalProperties: true
+      description: Optional desktop/VNC setup options used by the Ori dashboard and CLI. Most callers send an empty body.
+      properties:
+        publicAccess:
+          type: boolean
+          default: false
+          description: For `?vnc=1`, return a noVNC URL that does not require an access token.
+    MeResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [user]
+          properties:
+            type:
+              type: string
+              const: user.info
+            user:
+              type: object
+              properties:
+                login:
+                  type: string
+                email:
+                  type: [string, 'null']
+    LimitsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - $ref: '#/components/schemas/LimitsFields'
+    ReposResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [installations, environmentId, selectedRepositories]
+          properties:
+            installations:
+              type: array
+              items:
+                $ref: '#/components/schemas/RepositoryInstallation'
+            environmentId:
+              type: string
+            selectedRepositories:
+              type: array
+              items:
+                $ref: '#/components/schemas/SelectedRepository'
+            pageInfo:
+              $ref: '#/components/schemas/PageInfo'
+    RepoSelectionResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [success, environmentId, selectedRepositories]
+          properties:
+            success:
+              type: boolean
+            environmentId:
+              type: string
+            selectedRepositories:
+              type: array
+              items:
+                $ref: '#/components/schemas/SelectedRepository'
+    SecretsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [environmentId, envContents, secretFiles]
+          properties:
+            success:
+              type: boolean
+            environmentId:
+              type: string
+            envContents:
+              type: string
+            secretFiles:
+              type: array
+              items:
+                $ref: '#/components/schemas/SecretFile'
+            pushed:
+              type: object
+              additionalProperties: true
+              description: Present on update; counts how many active Oris received the new environment.
+    OriListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [oris]
+          properties:
+            type:
+              type: string
+              const: ori.list
+            oris:
+              type: array
+              items:
+                $ref: '#/components/schemas/Ori'
+            pageInfo:
+              $ref: '#/components/schemas/PageInfo'
+    OriInfoResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [ori]
+          properties:
+            type:
+              type: string
+              examples: [ori.info]
+            ori:
+              $ref: '#/components/schemas/Ori'
+    CreateOriResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [status, ttlSeconds, ori]
+          properties:
+            type:
+              type: string
+              const: ori.created
+            status:
+              type: string
+              enum: [provisioning]
+            ttlSeconds:
+              type: [integer, 'null']
+            ori:
+              $ref: '#/components/schemas/Ori'
+    OriActionResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [id, status]
+          properties:
+            type:
+              type: string
+              examples: [ori.stopping]
+            id:
+              type: string
+            status:
+              type: string
+              examples: [archiving]
+            ori:
+              oneOf:
+                - $ref: '#/components/schemas/Ori'
+                - type: 'null'
+    PageInfo:
+      type: object
+      required: [nextCursor, hasMore, limit]
+      properties:
+        nextCursor:
+          type: [string, 'null']
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+    EventPageInfo:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          required: [followCursor]
+          properties:
+            followCursor:
+              type: [string, 'null']
+              description: >-
+                Cursor positioned strictly after the last event on this page, for long-polling
+                with `sort=asc`. Unlike `nextCursor` (null once the page is the last one), this
+                is always usable to ask for whatever arrives next; it is null only when the ori
+                has no events at all.
+    PromptRun:
+      type: object
+      required: [id, promptId, oriId, status, done]
+      properties:
+        id: { type: string }
+        promptId: { type: string }
+        oriId: { type: string }
+        status:
+          type: string
+          enum: [sending, queued, running, finished, failed]
+        done:
+          type: boolean
+        createdAt:
+          type: [string, 'null']
+          format: date-time
+        model:
+          type: [string, 'null']
+        reasoningEffort:
+          type: [string, 'null']
+    PromptRunResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [id, promptRun]
+          properties:
+            type:
+              type: string
+              const: prompt.run
+            id:
+              type: string
+            promptRun:
+              $ref: '#/components/schemas/PromptRun'
+    OriEvent:
+      type: object
+      required: [type]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        timestamp:
+          type: integer
+        taskId:
+          type: [string, 'null']
+        data:
+          type: object
+          additionalProperties: true
+    UnknownEvent:
+      type: object
+      required: [type]
+      additionalProperties: true
+      properties:
+        type: { type: string }
+    PromptEvent:
+      type: object
+      required: [id, type, timestamp, data]
+      properties:
+        id: { type: string }
+        type: { type: string, const: prompt }
+        timestamp: { type: integer }
+        taskId: { type: [string, 'null'] }
+        data:
+          type: object
+          required: [prompt, status]
+          properties:
+            prompt: { type: string }
+            status: { type: string, enum: [sending, queued, running, finished, failed] }
+            is_reverted: { type: boolean }
+    ResponseEvent:
+      type: object
+      required: [id, type, timestamp, data]
+      description: Agent response event. Text deltas/finals and tool-call batches are both represented as response events; tool-call batches have `data.tools`.
+      properties:
+        id: { type: string }
+        type: { type: string, const: response }
+        timestamp: { type: integer }
+        taskId: { type: [string, 'null'] }
+        data:
+          type: object
+          required: [content]
+          properties:
+            content: { type: string }
+            model: { type: [string, 'null'] }
+            tools:
+              type: array
+              description: Tool call/result records emitted by the agent. Present for tool-call events and omitted for text-only response events.
+              items: { type: object, additionalProperties: true }
+            is_streaming:
+              type: boolean
+              description: True when this response is a streaming partial rather than the final assistant message.
+    GitCheckpointEvent:
+      type: object
+      required: [id, type, timestamp, data]
+      properties:
+        id: { type: string }
+        type: { type: string, const: git_checkpoint }
+        timestamp: { type: integer }
+        taskId: { type: [string, 'null'] }
+        data:
+          type: object
+          required: [commitSha, commitMessage, branch]
+          properties:
+            commitSha: { type: string }
+            commitMessage: { type: string }
+            commitUrl: { type: [string, 'null'] }
+            branch: { type: string }
+            filesChanged: { type: integer }
+            additions: { type: integer }
+            deletions: { type: integer }
+            pushed: { type: boolean }
+    ErrorEvent:
+      type: object
+      required: [id, type, timestamp, data]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [usage_limit, shield] }
+        timestamp: { type: integer }
+        taskId: { type: [string, 'null'] }
+        data: { type: object, additionalProperties: true }
+    CompletionEvent:
+      type: object
+      required: [id, type, timestamp, data]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [task_notification, compaction_complete] }
+        timestamp: { type: integer }
+        taskId: { type: [string, 'null'] }
+        data: { type: object, additionalProperties: true }
+    FileReadResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [success, path, encoding, size, content]
+          properties:
+            type: { type: string, const: file.read }
+            success: { type: boolean }
+            path: { type: string }
+            encoding: { type: string, enum: [utf8, base64] }
+            size: { type: integer }
+            content: { type: string }
+    FileWriteRequest:
+      type: object
+      required: [path, content]
+      properties:
+        path: { type: string, description: Relative path inside the Ori work directory. }
+        content: { type: string }
+        encoding: { type: string, enum: [utf8, base64], default: utf8 }
+    FileWriteResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [success, path, encoding, size]
+          properties:
+            type: { type: string, const: file.written }
+            success: { type: boolean }
+            path: { type: string }
+            encoding: { type: string, enum: [utf8, base64] }
+            size: { type: integer }
+    CommandRequest:
+      type: object
+      required: [command]
+      properties:
+        command: { type: string }
+        cwd: { type: string, description: Relative working directory inside the Ori work directory. }
+        timeoutSeconds: { type: integer, minimum: 1, maximum: 60, default: 30 }
+    CommandResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [success, exitCode, stdout, stderr, timedOut]
+          properties:
+            type: { type: string, const: command.finished }
+            success: { type: boolean }
+            exitCode: { type: [integer, 'null'] }
+            signal: { type: [string, 'null'] }
+            stdout: { type: string }
+            stderr: { type: string }
+            stdoutTruncated: { type: boolean }
+            stderrTruncated: { type: boolean }
+            timedOut: { type: boolean }
+            cwd: { type: string }
+            startedAt: { type: string, format: date-time }
+            finishedAt: { type: string, format: date-time }
+    PromptResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [id, promptId, promptRun, status, provider]
+          properties:
+            type:
+              type: string
+              const: prompt.queued
+            id:
+              type: string
+              description: Ori id.
+            promptId:
+              type: string
+            promptRun:
+              $ref: '#/components/schemas/PromptRun'
+            status:
+              type: string
+              enum: [queued]
+            provider:
+              type: string
+            model:
+              type: [string, 'null']
+            reasoningEffort:
+              type: [string, 'null']
+    EventsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [id, events]
+          properties:
+            type:
+              type: string
+              const: events.list
+            id:
+              type: string
+            events:
+              type: array
+              description: Ori work and lifecycle event objects. Event shapes are intentionally extensible; branch on each event `type` when present.
+              items:
+                $ref: '#/components/schemas/OriEvent'
+            pageInfo:
+              $ref: '#/components/schemas/EventPageInfo'
+    DesktopResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          additionalProperties: true
+          properties:
+            type:
+              type: string
+              examples: [desktop.url]
+            success:
+              type: boolean
+            desktopUrl:
+              type: [string, 'null']
+              format: uri
+              description: Secret-bearing desktop or noVNC URL. Redact from logs.
+            ip:
+              type: [string, 'null']
+            mode:
+              type: string
+              examples: [vnc]
+            provisioning:
+              type: boolean
+              description: For `?vnc=1`, true means VNC is still being prepared; poll again.
+            message:
+              type: string
+    SshKeyResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          properties:
+            success:
+              type: boolean
+            machineIp:
+              type: [string, 'null']
+            sshUser:
+              type: string
+              examples: [user]
+    ApiKeysResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [apiKeys]
+          properties:
+            apiKeys:
+              type: array
+              items:
+                $ref: '#/components/schemas/ApiKey'
+    SnapshotSummary:
+      type: object
+      required: [id, oriId, status, generation, createdAt, sizeBytes, fileCount]
+      properties:
+        id:
+          type: string
+          format: uuid
+        oriId:
+          type: string
+          description: Public Ori id this snapshot belongs to.
+        status:
+          type: string
+          enum: [completed]
+        kind:
+          type: [string, 'null']
+          enum: [base, incremental, null]
+          description: '`base` (full) or `incremental` (delta on a base). `null` for legacy snapshots.'
+        generation:
+          type: integer
+          description: Position in the incremental chain (0 = base).
+        chainId:
+          type: [string, 'null']
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        sizeBytes:
+          type: integer
+          description: Bytes this snapshot added (its delta), not the full restored size.
+        fileCount:
+          type: integer
+          description: Inventory entries alive in the chain at this generation (includes base-image system entries).
+        contentSizeBytes:
+          type: [integer, 'null']
+          description: Total bytes of your data restored by this snapshot (what resume/download returns; base image excluded). `null` on legacy snapshots.
+        contentFileCount:
+          type: [integer, 'null']
+          description: Number of your files restored by this snapshot (base image excluded). `null` on legacy snapshots.
+    SnapshotListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [snapshots]
+          properties:
+            type:
+              type: string
+              const: snapshot.list
+            snapshots:
+              type: array
+              items:
+                $ref: '#/components/schemas/SnapshotSummary'
+            pageInfo:
+              $ref: '#/components/schemas/PageInfo'
+    SnapshotLatestResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [snapshot]
+          properties:
+            type:
+              type: string
+              const: snapshot.latest
+            snapshot:
+              oneOf:
+                - $ref: '#/components/schemas/SnapshotSummary'
+                - type: 'null'
+    SnapshotTreeEntry:
+      type: object
+      required: [path, kind]
+      properties:
+        path:
+          type: string
+          description: Path relative to the snapshot root. Docker named volumes appear under `__dockervol__/`.
+        kind:
+          type: string
+          enum: [file, dir, symlink]
+        size:
+          type: integer
+          description: File size in bytes. Omitted for directories.
+    SnapshotTreeResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [snapshotId, oriId, generation, treeAvailable, truncated, fileCount, totalSizeBytes, entries]
+          properties:
+            type:
+              type: string
+              const: snapshot.tree
+            snapshotId:
+              type: string
+              format: uuid
+            oriId:
+              type: string
+            generation:
+              type: integer
+            treeAvailable:
+              type: boolean
+              description: '`false` for legacy snapshots or inventories too large to expand; see `reason`.'
+            truncated:
+              type: boolean
+              description: '`true` when the file list was capped; not every entry is returned.'
+            fileCount:
+              type: integer
+              description: Number of your files in this snapshot (base-image system files excluded).
+            totalSizeBytes:
+              type: integer
+              description: Total bytes of your data in this snapshot (base-image system files excluded).
+            entries:
+              type: array
+              description: Exactly the files/dirs a resume or download returns, your data only; base-image system entries are not listed.
+              items:
+                $ref: '#/components/schemas/SnapshotTreeEntry'
+            reason:
+              type: string
+              description: Why the tree is unavailable, when `treeAvailable` is `false`.
+              examples: [legacy_snapshot, inventory_too_large]
+    SnapshotChunk:
+      type: object
+      required: [snapshotId, generation, chunkIndex, r2Key, sizeBytes, sha256, signedUrl]
+      properties:
+        snapshotId:
+          type: string
+          format: uuid
+        generation:
+          type: integer
+        chunkIndex:
+          type: integer
+        r2Key:
+          type: string
+        sizeBytes:
+          type: integer
+        sha256:
+          type: string
+        signedUrl:
+          type: string
+          format: uri
+          description: Time-limited download URL (see `expiresInSeconds`).
+    SnapshotDownloadResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessBase'
+        - type: object
+          required: [snapshotId, oriId, kind, generation, expiresInSeconds, reconstruct, chunks]
+          properties:
+            type:
+              type: string
+              const: snapshot.download
+            snapshotId:
+              type: string
+              format: uuid
+            oriId:
+              type: string
+            kind:
+              type: string
+              enum: [base, incremental, legacy]
+            generation:
+              type: integer
+            expiresInSeconds:
+              type: integer
+              description: Lifetime of every `signedUrl` in this response.
+            reconstruct:
+              type: string
+              description: Human-readable note on how to reassemble the chunks into a filesystem.
+            inventory:
+              oneOf:
+                - type: object
+                  required: [r2Key, signedUrl]
+                  properties:
+                    r2Key: { type: string }
+                    signedUrl: { type: string, format: uri }
+                - type: 'null'
+            chunks:
+              type: array
+              description: Every chunk across the chain (all generations up to and including this snapshot), ordered by `(generation, chunkIndex)`.
+              items:
+                $ref: '#/components/schemas/SnapshotChunk'
+  responses:
+    BadRequest:
+      description: Invalid request body or parameters.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            invalid:
+              value:
+                ok: false
+                type: ori.error
+                status: 400
+                code: invalid_json
+                message: Request body must be valid JSON.
+                error: { code: invalid_json, message: Request body must be valid JSON., status: 400 }
+                requestId: req_01HX...
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            unauthorized:
+              value:
+                ok: false
+                type: ori.error
+                status: 401
+                code: unauthorized
+                message: Unauthorized
+                error: { code: unauthorized, message: Unauthorized, status: 401 }
+                requestId: req_01HX...
+    Forbidden:
+      description: Authenticated token is not allowed to perform this action.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            forbidden:
+              value:
+                ok: false
+                type: ori.error
+                status: 403
+                code: forbidden
+                message: Forbidden
+                error: { code: forbidden, message: Forbidden, status: 403 }
+                requestId: req_01HX...
+    PaymentRequired:
+      description: Account cannot currently create or operate Oris. The error body may include a dashboard billing URL, but billing actions are not part of the v1 API.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: Request conflicts with current account or ori state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RateLimited:
+      description: >-
+        Machine start or concurrent-ori limit reached. Create, fork and resume each count as one
+        machine start against your plan's per-minute rate (`rate_limited`) and against the
+        platform ceilings of 600 starts per hour and 1500 per day (`start_limit_reached`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+paths:
+  /me:
+    get:
+      tags: [Ori]
+      summary: Get current Ori user
+      description: Returns GitHub identity for the authenticated Ori account.
+      operationId: me
+      responses:
+        '200':
+          description: Current user information.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MeResponse' }
+              examples:
+                user:
+                  value:
+                    ok: true
+                    type: user.info
+                    user: { login: octocat, email: octocat@example.com }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /limits:
+    get:
+      tags: [Ori]
+      summary: Get Ori limits
+      description: Check quota, access readiness, and concurrent-ori capacity for the authenticated account.
+      operationId: limits
+      responses:
+        '200':
+          description: Current creation and concurrent-ori limits.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LimitsResponse' }
+              examples:
+                ready:
+                  value:
+                    ok: true
+                    type: limits.info
+                    canStart: true
+                    activeOris: 1
+                    activeStates: [provisioned, cloning, ready, idle, running]
+                    oriPlanKey: ori_20
+                    oriPlanDollars: 20
+                    maxActiveOris: 100
+                    maxCreationRequestsPerMinute: 10
+                    maxCreationRequestsPerDay: null
+                    billingStatus: active
+                    creditBalanceSeconds: 7200
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /repos:
+    get:
+      tags: [Ori]
+      summary: List GitHub repositories available to Ori
+      description: Returns GitHub repositories grouped by installation plus the current selected repositories for new Oris.
+      operationId: repos
+      parameters:
+        - name: sync
+          in: query
+          schema: { type: boolean }
+          description: When true, sync from GitHub before returning repository groups.
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Sort'
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive repository name/fullName filter.
+        - name: selected
+          in: query
+          schema: { type: boolean }
+          description: Filter to selected or unselected repositories.
+      responses:
+        '200':
+          description: Repository groups and current Ori repository selection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReposResponse' }
+              examples:
+                repos:
+                  value:
+                    ok: true
+                    type: repos.list
+                    environmentId: env_123
+                    installations:
+                      - type: Organization
+                        accountLogin: acme
+                        accountAvatarUrl: https://github.com/acme.png
+                        repositories:
+                          - id: 123456
+                            databaseId: repo_org_123456
+                            name: web
+                            fullName: acme/web
+                            description: Marketing site
+                            url: https://github.com/acme/web
+                            private: true
+                            permissions: admin
+                            pushedAt: '2026-05-31T12:00:00Z'
+                    selectedRepositories:
+                      - id: 123456
+                        databaseId: repo_org_123456
+                        name: web
+                        fullName: acme/web
+                        private: true
+                        permissions: admin
+                        pushedAt: '2026-05-31T12:00:00Z'
+                        baseBranch: dev
+                        setupRoutineId: null
+                        setupScript: ''
+                        setupBlocking: false
+                        preCommitHooks: []
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    post:
+      tags: [Ori]
+      summary: Select repository for Oris
+      description: Idempotently selects one repository for the Ori environment. Use `databaseId` from `GET /repos` as `repositoryId`; selecting an already-selected repository updates its `baseBranch`.
+      operationId: selectRepo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RepoSelectionRequest' }
+      responses:
+        '200':
+          description: Updated repository selection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepoSelectionResponse' }
+              examples:
+                selected:
+                  value:
+                    ok: true
+                    type: repos.updated
+                    success: true
+                    environmentId: env_123
+                    selectedRepositories:
+                      - databaseId: repo_org_123456
+                        name: web
+                        fullName: acme/web
+                        baseBranch: dev
+                        setupRoutineId: null
+                        setupScript: ''
+                        setupBlocking: false
+                        preCommitHooks: []
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api-keys:
+    get:
+      tags: [Ori]
+      summary: List API keys
+      description: Lists API key metadata only. Raw key secrets are not returned after creation/rotation. Results are scoped to the authenticated Ori account.
+      operationId: apiKeys
+      responses:
+        '200':
+          description: API key metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeysResponse' }
+              examples:
+                keys:
+                  value:
+                    ok: true
+                    type: api_key.list
+                    apiKeys:
+                      - id: sak_123
+                        name: Production worker
+                        keyPrefix: ori_live
+                        keyLastFour: 9abc
+                        createdAt: '2026-05-31T12:00:00Z'
+                        lastUsedAt: null
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /secrets:
+    get:
+      tags: [Ori]
+      summary: Get Ori secrets setup
+      description: Returns the environment variables and secret files configured for Oris.
+      operationId: secrets
+      responses:
+        '200':
+          description: Current secret setup metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecretsResponse' }
+              examples:
+                secrets:
+                  value:
+                    ok: true
+                    type: secrets.info
+                    environmentId: env_123
+                    envContents: "OPENAI_API_KEY=sk-...\n"
+                    secretFiles:
+                      - path: .config/service-account.json
+                        contents: '{"type":"service_account"}'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Ori]
+      summary: Update Ori secrets setup
+      operationId: updateSecrets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SecretsUpdateRequest' }
+      responses:
+        '200':
+          description: Updated secret setup metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecretsResponse' }
+              examples:
+                updated:
+                  value:
+                    ok: true
+                    type: secrets.updated
+                    success: true
+                    environmentId: env_123
+                    envContents: "OPENAI_API_KEY=sk-...\n"
+                    secretFiles: []
+                    pushed: { updated: 2, failed: 0 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /oris:
+    get:
+      tags: [Ori]
+      summary: List oris
+      operationId: oris
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Sort'
+        - name: state
+          in: query
+          schema: { type: string }
+          description: Comma-separated Ori state filter, for example `ready,idle,running`.
+      responses:
+        '200':
+          description: Oris owned by the authenticated Ori user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OriListResponse' }
+              examples:
+                oris:
+                  value:
+                    ok: true
+                    type: ori.list
+                    oris:
+                      - id: or_23456789
+                        name: Ori 2026-05-31 12:00
+                        state: idle
+                        url: https://machine.on.example.com
+                        ip: 203.0.113.10
+                        createdAt: '2026-05-31T12:00:00Z'
+                        updatedAt: '2026-05-31T12:05:00Z'
+                        archiveAfter: '2026-05-31T13:00:00Z'
+                        desktopAvailable: true
+                        desktopUrl: https://desktop.example/stream.html?token=redacted
+                        snapshotAvailable: false
+                        snapshotCompletedAt: null
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Ori]
+      summary: Create ori
+      description: Provision a new cloud computer. Store the returned `ori.id` with your product job/session record.
+      operationId: create
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateOriRequest' }
+      responses:
+        '202':
+          description: Ori accepted for provisioning.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateOriResponse' }
+              examples:
+                provisioning:
+                  value:
+                    ok: true
+                    type: ori.created
+                    status: provisioning
+                    ttlSeconds: 3600
+                    ori:
+                      id: or_23456789
+                      name: Ori 2026-05-31 12:00
+                      state: provisioning
+                      url: null
+                      ip: null
+                      createdAt: '2026-05-31T12:00:00Z'
+                      updatedAt: '2026-05-31T12:00:00Z'
+                      archiveAfter: '2026-05-31T13:00:00Z'
+                      desktopAvailable: false
+                      desktopUrl: null
+                      snapshotAvailable: false
+                      snapshotCompletedAt: null
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /oris/{oriId}:
+    parameters:
+      - $ref: '#/components/parameters/OriId'
+    get:
+      tags: [Ori]
+      summary: Get ori
+      description: Poll this endpoint after create, stop, resume, or fork operations.
+      operationId: get
+      responses:
+        '200':
+          description: Ori details.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OriInfoResponse' }
+              examples:
+                ori:
+                  value:
+                    ok: true
+                    type: ori.info
+                    ori:
+                      id: or_23456789
+                      name: Ori 2026-05-31 12:00
+                      state: idle
+                      url: https://machine.on.example.com
+                      ip: 203.0.113.10
+                      createdAt: '2026-05-31T12:00:00Z'
+                      updatedAt: '2026-05-31T12:05:00Z'
+                      archiveAfter: '2026-05-31T13:00:00Z'
+                      desktopAvailable: true
+                      desktopUrl: https://desktop.example/stream.html?token=redacted
+                      snapshotAvailable: false
+                      snapshotCompletedAt: null
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Ori]
+      summary: Update ori
+      operationId: update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateOriRequest' }
+      responses:
+        '200':
+          description: Updated ori details.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OriInfoResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /oris/{oriId}/stop:
+    post:
+      tags: [Ori]
+      summary: Stop and archive ori
+      description: |
+        Stop active work and archive/snapshot the ori for later resume or fork.
+
+        A stop always saves the ori's disk first. If that save is failing, the stop is
+        refused and the ori keeps running so your work is not discarded, we retry
+        automatically and email you. You are not billed for time spent in that state.
+
+        Set `force: true` to stop anyway, accepting the loss of everything written since
+        the last successful snapshot. This is irreversible; only reach for it after a
+        stop has already failed.
+      operationId: stop
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StopRequest' }
+      responses:
+        '202':
+          description: Ori archival started or already in progress.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OriActionResponse' }
+              examples:
+                archiving:
+                  value:
+                    ok: true
+                    type: ori.stopping
+                    id: or_23456789
+                    status: archiving
+                    ori: { id: or_23456789, name: Ori 2026-05-31 12:00, state: archiving, desktopAvailable: true, snapshotAvailable: false }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /oris/{oriId}/resume:
+    post:
+      tags: [Ori]
+      summary: Resume ori
+      operationId: resume
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResumeRequest' }
+      responses:
+        '202':
+          description: Resume started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OriActionResponse' }
+              examples:
+                resuming:
+                  value:
+                    ok: true
+                    type: ori.resuming
+                    id: or_23456789
+                    status: resuming
+                    ori: { id: or_23456789, name: Ori 2026-05-31 12:00, state: provisioning, desktopAvailable: false, snapshotAvailable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /oris/{oriId}/fork:
+    post:
+      tags: [Ori]
+      summary: Fork ori
+      operationId: fork
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: >-
+                    Replaces the env the fork would otherwise inherit from the source ori.
+                    Same validation rules as `CreateOriRequest.env`.
+                noEnv:
+                  type: boolean
+                  description: >-
+                    Make the fork no-env (see `CreateOriRequest.noEnv`). A fork of a no-env ori is
+                    always no-env regardless of this field.
+                type:
+                  type: string
+                  enum: [small, default, large]
+                  description: >-
+                    Machine size for the fork. Omit to inherit the source ori's type. The source
+                    ori is never modified. Shrinking is rejected with `type_too_small` when the
+                    source's data would not fit the smaller disk.
+      responses:
+        '202':
+          description: Fork started. The response `id` is the new forked ori id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OriActionResponse' }
+              examples:
+                forking:
+                  value:
+                    ok: true
+                    type: ori.forking
+                    id: or_abcdef23
+                    status: forking
+                    ori: { id: or_abcdef23, name: Ori fork, state: provisioning, desktopAvailable: false, snapshotAvailable: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /oris/{oriId}/prompt:
+    post:
+      tags: [Ori]
+      summary: Prompt Ori
+      description: Queue a natural-language work item for Codex or Claude Code inside the ori. Observe progress with `GET /oris/{oriId}/events`.
+      operationId: prompt
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PromptRequest' }
+            examples:
+              repoWork:
+                value:
+                  provider: codex
+                  model: gpt-5.4
+                  reasoningEffort: medium
+                  prompt: Work on the selected repo, run tests, fix failures, commit the result, and report any hosted preview URL.
+              computerUse:
+                value:
+                  provider: claude-code
+                  model: sonnet
+                  reasoningEffort: high
+                  prompt: Use the browser to research flight options to France and return the best itinerary summary with source links.
+      responses:
+        '202':
+          description: Prompt queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PromptResponse' }
+              examples:
+                queued:
+                  value:
+                    ok: true
+                    type: prompt.queued
+                    id: or_23456789
+                    promptId: prompt_123
+                    promptRun:
+                      id: prompt_123
+                      promptId: prompt_123
+                      oriId: or_23456789
+                      status: queued
+                      done: false
+                    status: queued
+                    provider: codex
+                    model: gpt-5.4
+                    reasoningEffort: medium
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /oris/{oriId}/events:
+    get:
+      tags: [Ori]
+      summary: List ori events
+      description: Return Ori work, lifecycle, and progress events so product UIs can show what the ori is doing. Event payloads are extensible. Clients can long-poll this endpoint with `sort=asc` and a cursor to stream responses. Response events expose agent text, streaming partials via `data.is_streaming`, and tool calls/results via `data.tools`.
+      operationId: events
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Sort'
+        - name: type
+          in: query
+          schema: { type: string }
+          description: Comma-separated event type filter, for example `prompt,response,git_checkpoint`.
+      responses:
+        '200':
+          description: Ori work and lifecycle events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventsResponse' }
+              examples:
+                progress:
+                  value:
+                    ok: true
+                    type: events.list
+                    id: or_23456789
+                    events:
+                      - id: prompt_123
+                        type: prompt
+                        timestamp: 1780347055370
+                        taskId: prompt_123
+                        data:
+                          prompt: Run tests and summarize failures.
+                          status: running
+                          is_reverted: false
+                      - id: response_123-tools
+                        type: response
+                        timestamp: 1780347063427
+                        taskId: prompt_123
+                        data:
+                          content: ""
+                          model: gpt-5.4
+                          tools:
+                            - use:
+                                id: call_123
+                                type: tool_use
+                                name: Bash
+                                input:
+                                  command: npm test
+                              result:
+                                type: tool_result
+                                tool_use_id: call_123
+                                is_error: false
+                                content: '{"exitCode":0}'
+                          is_reverted: false
+                      - id: response_123
+                        type: response
+                        timestamp: 1780347065650
+                        taskId: prompt_123
+                        data:
+                          content: Tests passed.
+                          model: gpt-5.4
+                          is_reverted: false
+                    pageInfo:
+                      nextCursor: null
+                      hasMore: false
+                      limit: 100
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /oris/{oriId}/prompts/{promptId}:
+    get:
+      tags: [Ori]
+      summary: Get prompt run status
+      description: Returns first-class status for a queued/running/finished prompt so clients do not infer completion from ori state and events.
+      operationId: promptRunStatus
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+        - name: promptId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Prompt run status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PromptRunResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /oris/{oriId}/files:
+    get:
+      tags: [Ori]
+      summary: Read a file from a Ori
+      operationId: readFile
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+        - name: encoding
+          in: query
+          schema: { type: string, enum: [utf8, base64], default: utf8 }
+      responses:
+        '200':
+          description: File contents.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileReadResponse' }
+    put:
+      tags: [Ori]
+      summary: Write a file in a Ori
+      operationId: writeFile
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FileWriteRequest' }
+      responses:
+        '200':
+          description: File written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileWriteResponse' }
+  /oris/{oriId}/commands:
+    post:
+      tags: [Ori]
+      summary: Execute a command in a Ori
+      operationId: command
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandRequest' }
+      responses:
+        '200':
+          description: Command result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommandResponse' }
+  /oris/{oriId}/artifacts:
+    get:
+      tags: [Ori]
+      summary: Download a Ori artifact
+      operationId: artifact
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Artifact bytes.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /oris/{oriId}/interrupt:
+    post:
+      tags: [Ori]
+      summary: Interrupt running work
+      operationId: interrupt
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      responses:
+        '200':
+          description: Interrupt requested.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OriActionResponse' }
+              examples:
+                interrupted:
+                  value:
+                    ok: true
+                    type: ori.interrupted
+                    id: or_23456789
+                    status: interrupted
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /oris/{oriId}/desktop:
+    post:
+      tags: [Ori]
+      summary: Get desktop streaming URL
+      description: "Create or fetch a secret-bearing desktop/noVNC URL for live computer-use visibility. Use `?vnc=1` for noVNC; a `provisioning: true` response means poll again."
+      operationId: desktop
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+        - name: vnc
+          in: query
+          schema:
+            type: integer
+            enum: [1]
+          description: Use VNC/noVNC streaming mode.
+        - name: theme
+          in: query
+          schema:
+            type: string
+            enum: [light, dark]
+          description: Desktop streaming theme for non-VNC mode.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DesktopRequest' }
+      responses:
+        '200':
+          description: Desktop streaming URL, or provisioning state for VNC setup.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DesktopResponse' }
+              examples:
+                ready:
+                  value:
+                    ok: true
+                    type: desktop.url
+                    success: true
+                    desktopUrl: https://ori-preview.example/vnc.html?_token=redacted
+                    ip: 203.0.113.10
+                    mode: vnc
+                provisioning:
+                  value:
+                    ok: true
+                    type: desktop.provisioning
+                    provisioning: true
+                    message: Preparing VNC desktop…
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /oris/{oriId}/sshkey:
+    post:
+      tags: [Ori]
+      summary: Configure ori SSH key
+      description: Adds an OpenSSH public key to the running Ori so the caller can SSH as user `user`.
+      operationId: sshKey
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SshKeyRequest' }
+      responses:
+        '200':
+          description: SSH key setup result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SshKeyResponse' }
+              examples:
+                configured:
+                  value:
+                    ok: true
+                    type: ssh_key.configured
+                    success: true
+                    machineIp: 203.0.113.10
+                    sshUser: user
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /snapshots:
+    get:
+      tags: [Ori]
+      summary: List snapshots
+      description: List completed snapshots across all of your oris, newest first. Each item carries the `oriId` it belongs to.
+      operationId: listSnapshots
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Completed snapshots owned by the authenticated Ori user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SnapshotListResponse' }
+              examples:
+                snapshots:
+                  value:
+                    ok: true
+                    type: snapshot.list
+                    snapshots:
+                      - id: 7417be09-d419-4ae0-b3fc-7f04a5a71ef1
+                        oriId: or_23456789
+                        status: completed
+                        kind: incremental
+                        generation: 3
+                        chainId: 4ced5b04-d2cb-4ec3-b127-3b3ed836cab5
+                        createdAt: '2026-06-24T06:24:00Z'
+                        completedAt: '2026-06-24T06:24:50Z'
+                        sizeBytes: 18874368
+                        fileCount: 6781
+                    pageInfo:
+                      nextCursor: null
+                      hasMore: false
+                      limit: 50
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /oris/{oriId}/snapshots:
+    get:
+      tags: [Ori]
+      summary: List ori snapshots
+      description: List completed snapshots for one ori, newest first.
+      operationId: listOriSnapshots
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Completed snapshots for this ori.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SnapshotListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /oris/{oriId}/snapshots/latest:
+    get:
+      tags: [Ori]
+      summary: Get latest ori snapshot
+      description: Return the most recent completed snapshot for this ori, or `null` if it has none.
+      operationId: getLatestOriSnapshot
+      parameters:
+        - $ref: '#/components/parameters/OriId'
+      responses:
+        '200':
+          description: Most recent completed snapshot, or `null`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SnapshotLatestResponse' }
+              examples:
+                latest:
+                  value:
+                    ok: true
+                    type: snapshot.latest
+                    snapshot:
+                      id: 7417be09-d419-4ae0-b3fc-7f04a5a71ef1
+                      oriId: or_23456789
+                      status: completed
+                      kind: incremental
+                      generation: 3
+                      chainId: 4ced5b04-d2cb-4ec3-b127-3b3ed836cab5
+                      createdAt: '2026-06-24T06:24:00Z'
+                      completedAt: '2026-06-24T06:24:50Z'
+                      sizeBytes: 18874368
+                      fileCount: 6781
+                none:
+                  value:
+                    ok: true
+                    type: snapshot.latest
+                    snapshot: null
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /snapshots/{snapshotId}/tree:
+    get:
+      tags: [Ori]
+      summary: Get snapshot file tree
+      description: List the files and folders captured in a snapshot, with sizes. Returns a flat list of entries you can render as a tree.
+      operationId: getSnapshotTree
+      parameters:
+        - $ref: '#/components/parameters/SnapshotId'
+      responses:
+        '200':
+          description: Flat file/folder listing for the snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SnapshotTreeResponse' }
+              examples:
+                tree:
+                  value:
+                    ok: true
+                    type: snapshot.tree
+                    snapshotId: 7417be09-d419-4ae0-b3fc-7f04a5a71ef1
+                    oriId: or_23456789
+                    generation: 3
+                    treeAvailable: true
+                    truncated: false
+                    fileCount: 6781
+                    totalSizeBytes: 458291
+                    entries:
+                      - { path: src, kind: dir }
+                      - { path: src/main.ts, kind: file, size: 1024 }
+                legacy:
+                  value:
+                    ok: true
+                    type: snapshot.tree
+                    snapshotId: 7417be09-d419-4ae0-b3fc-7f04a5a71ef1
+                    oriId: or_23456789
+                    generation: 0
+                    treeAvailable: false
+                    truncated: false
+                    fileCount: 0
+                    totalSizeBytes: 0
+                    entries: []
+                    reason: legacy_snapshot
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /snapshots/{snapshotId}/files:
+    get:
+      tags: [Ori]
+      summary: Download a file or folder from a snapshot
+      description: >-
+        Stream a single file's bytes, or a folder subtree as a tar archive, directly
+        out of a snapshot, the ori can be stopped or archived; the machine is never
+        contacted. Use `GET /snapshots/{snapshotId}/tree` to list paths, then pass one
+        here. Paths are relative to the snapshot root (same space as `tree` entries;
+        docker volumes under `__dockervol__/`). An empty or `/` path downloads the whole
+        snapshot as a tar. Folder responses set `X-Snapshot-File-Count`,
+        `X-Snapshot-Total-Size-Bytes` and `X-Snapshot-Skipped-Base-Image-Files` headers;
+        both response shapes set `X-Snapshot-Entry-Kind` (`file` or `dir`).
+      operationId: getSnapshotFile
+      parameters:
+        - $ref: '#/components/parameters/SnapshotId'
+        - name: path
+          in: query
+          required: false
+          schema: { type: string }
+          description: File or folder path inside the snapshot. Empty for the whole snapshot.
+      responses:
+        '200':
+          description: File bytes (`application/octet-stream`) or folder tar (`application/x-tar`).
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            application/x-tar:
+              schema:
+                type: string
+                format: binary
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Path has no downloadable bytes, one of `legacy_snapshot` (pre-inventory snapshot), `snapshot_not_indexed` (content captured before the indexed snapshot format; take a new snapshot or use the download bundle), `base_image_file` (stock image file, not stored in snapshots), or `is_symlink` (request the symlink's target instead).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /snapshots/{snapshotId}/download:
+    get:
+      tags: [Ori]
+      summary: Get snapshot download
+      description: |
+        Return time-limited signed URLs for every chunk needed to reconstruct the ori filesystem at this snapshot (the full chain, base through this generation), plus the inventory. Download the chunks and reassemble them as described by `reconstruct`. The `ori snapshot pull` CLI command does this for you.
+      operationId: getSnapshotDownload
+      parameters:
+        - $ref: '#/components/parameters/SnapshotId'
+      responses:
+        '200':
+          description: Signed chunk URLs for the snapshot chain.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SnapshotDownloadResponse' }
+              examples:
+                download:
+                  value:
+                    ok: true
+                    type: snapshot.download
+                    snapshotId: 7417be09-d419-4ae0-b3fc-7f04a5a71ef1
+                    oriId: or_23456789
+                    kind: incremental
+                    generation: 3
+                    expiresInSeconds: 3600
+                    reconstruct: Download every chunk. For each snapshot in ascending generation, concat its chunks by chunkIndex and pipe through `zstd -d | tar -x`.
+                    inventory:
+                      r2Key: chains/4ced5b04/inventory-3.json.zst
+                      signedUrl: https://r2.example/chains/4ced5b04/inventory-3.json.zst?sig=redacted
+                    chunks:
+                      - snapshotId: 2db50582-716c-424c-817e-9495484f88dd
+                        generation: 0
+                        chunkIndex: 0
+                        r2Key: chains/4ced5b04/snapshots/2db50582/chunks/00.tar.zst
+                        sizeBytes: 209715200
+                        sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+                        signedUrl: https://r2.example/chains/4ced5b04/snapshots/2db50582/chunks/00.tar.zst?sig=redacted
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }

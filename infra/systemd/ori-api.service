@@ -1,0 +1,66 @@
+# ori-api.service — the control plane (public /api/ori/v1 + internal /internal/*)
+#
+# Runs on the bare-metal host. Binds 0.0.0.0:8080 so both the co-located edge
+# (Caddy, via loopback) and guest agents inside oris (via the routed subnet)
+# reach it. External exposure is constrained by the host firewall
+# (bootstrap.sh): the oris' routed subnet and loopback only.
+#
+# The user needs to drive Incus to create/destroy VMs, hence the
+# incus-admin supplementary group. On a fresh host run infra/bootstrap.sh,
+# which creates the user, directories, and /etc/ori/ori-api.env.
+
+[Unit]
+Description=ori control plane
+Wants=network-online.target
+After=network-online.target incus.service
+# bootstrap.sh enables this unit before the binary is deployed; the condition keeps a
+# host without the binary from crash-looping on every boot.
+# MUST live in [Unit] -- systemd only reads Condition* here. It was in [Service], where
+# systemd ignores it with "Unknown key name 'ConditionPathExists' in section 'Service'"
+# and the guard silently did nothing. Caught by `systemd-analyze verify` on Linux.
+ConditionPathExists=/usr/local/bin/ori-api
+
+[Service]
+Type=simple
+User=ori
+Group=ori
+SupplementaryGroups=incus-admin
+
+# Secrets and non-default settings come from the env file, never from the unit
+# or the command line. ORI's listen port (PORT) is also set there so it is
+# coordinated with the firewall and the edge's CONTROL_PLANE_BASE (see README).
+EnvironmentFile=/etc/ori/ori-api.env
+
+# Installed control-plane binary built from packages/api. Install it to this
+# path during deploy; bootstrap.sh only enables the unit and starts it when the
+# binary is present (see README "what to run in what order").
+ExecStart=/usr/local/bin/ori-api
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Runtime state under /var/lib/ori (RuntimeDirectory is auto-managed).
+RuntimeDirectory=ori
+
+# Hardening: keep the control plane from writing outside its tree.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/lib/ori
+
+# --- Firecracker driver (stage 1): see docs/OPERATIONS.md -------------------
+# Uncomment the lines below ONLY for the firecracker driver deployment. The
+# default docker deployment needs none of this and the unit is shared, so they
+# ship commented out. Stage 1 boots VMs; memory-snapshot warm resume is stage 2.
+#   - CAP_NET_ADMIN: create the tap devices that attach firecracker VMs to
+#     the ori-fc0 bridge (must appear in both CapabilityBoundingSet and
+#     AmbientCapabilities to survive User=ori).
+#   - /dev/kvm + /dev/net/tun: KVM and tap access for the VM itself.
+# AmbientCapabilities=CAP_NET_ADMIN
+# CapabilityBoundingSet=CAP_NET_ADMIN
+# DeviceAllow=/dev/kvm rw
+# DeviceAllow=/dev/net/tun rw
+
+[Install]
+WantedBy=multi-user.target

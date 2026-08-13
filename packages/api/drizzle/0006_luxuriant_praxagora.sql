@@ -1,0 +1,1 @@
+ALTER TABLE "oris" ADD COLUMN "display" boolean DEFAULT false NOT NULL;

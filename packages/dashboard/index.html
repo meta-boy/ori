@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>ori</title>
+    <!-- The origami mark. A real file rather than a data URI now that there is one; still
+         answers the browser's unprompted /favicon request, so no 404 in the console. -->
+    <link rel="icon" type="image/svg+xml" href="/dashboard/favicon.svg" />
+    <script>
+      // Set the theme class before first paint. Doing this in React would flash the wrong theme
+      // for a frame on every load.
+      try {
+        var t = localStorage.getItem("ori_theme") || "dark";
+        document.documentElement.classList.toggle("dark", t === "dark");
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

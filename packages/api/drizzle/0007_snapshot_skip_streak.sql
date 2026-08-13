@@ -1,0 +1,1 @@
+ALTER TABLE "oris" ADD COLUMN "snapshot_skip_streak" integer DEFAULT 0 NOT NULL;

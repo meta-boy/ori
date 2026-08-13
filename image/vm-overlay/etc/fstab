@@ -1,0 +1,9 @@
+# ori Firecracker guest rootfs (built by image/build-fc.sh as a whole-disk ext4
+# image). Root is the whole virtio-blk device /dev/vda, no partition table.
+#
+# The seed disk is the second virtio-blk device, /dev/vdb, an ext4 image built
+# with `mke2fs -d` by the driver (no root needed on the host). It carries the
+# per-ori guest agent binary (ori-agent) and identity env (ori.env). nofail
+# means a machine booted without a seed disk (noEnv forced-cold) still boots.
+/dev/vda    /              ext4    defaults,noatime                         0 1
+/dev/vdb    /run/ori-seed  ext4    defaults,nofail,x-systemd.device-timeout=2  0 2

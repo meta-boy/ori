@@ -1,0 +1,47 @@
+# ori-guest-agent.service — the in-ori agent (the "guest agent", port 7777)
+#
+# This unit runs INSIDE every ori VM, not on the host. It is installed and
+# enabled by the ori's cloud-init during provisioning (the Incus driver injects
+# the unit + /etc/ori/agent.env, which carries this ori's identity and agent
+# token). The agent binds 0.0.0.0:7777 so the control plane can reach it; the
+# host firewall (bootstrap.sh) is what makes port 7777 reachable ONLY from the
+# control plane address — the in-ori IMAGE must not open this port to the world
+# itself.
+#
+# Security note: the agent token is read from the environment file, NOT passed
+# on the command line, so it never shows up in `ps`/`/proc`. The control plane
+# seeds /etc/ori/agent.env at provision time.
+
+[Unit]
+Description=ori guest agent
+Wants=network-online.target
+After=network-online.target
+# Guard against a crash-loop if the agent binary/unit reach the ori out of order.
+# MUST live in [Unit] -- see the same note in ori-api.service. systemd ignores
+# Condition* under [Service], so this guard was inert until `systemd-analyze verify`
+# on Linux reported it.
+ConditionPathExists=/usr/local/bin/ori-guest-agent
+
+[Service]
+Type=simple
+User=root
+
+# The control plane writes this file when the ori is provisioned. It must
+# contain ORI_ID, ORI_AGENT_TOKEN, and CONTROL_PLANE_BASE. The `-` marks the
+# file optional so the unit still parses (start fails with a clear error if the
+# file is missing).
+EnvironmentFile=-/etc/ori/agent.env
+
+# Port 7777 is a product constant; do not make it a knob.
+ExecStart=/usr/local/bin/ori-guest-agent
+Restart=on-failure
+RestartSec=5
+
+# Hardening. Note: the agent legitimately reads/writes the ori's /home/user
+# (exec/file/env APIs) and /etc/ori.env, so ProtectSystem/ProtectHome cannot
+# be applied here; NoNewPrivileges + PrivateTmp keep it contained enough.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

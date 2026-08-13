@@ -1,0 +1,65 @@
+# An explicit project name. Compose otherwise derives it from the directory, which meant
+# renaming the checkout renamed every container and volume -- and silently orphaned the
+# postgres data, because a new project name means new volumes.
+name: ori
+
+services:
+  postgres:
+    image: postgres:17
+    # Come back on their own after a host reboot or a docker restart. Without this the
+    # default policy is "no": a restarted LXC came up with the control plane running and
+    # both dependencies exited 255, which reads as a broken install rather than a
+    # stopped database. minio-init stays "no" — it is a one-shot that must not respawn.
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ori
+      POSTGRES_PASSWORD: ori
+      POSTGRES_DB: ori
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ori -d ori"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    # Come back on their own after a host reboot or a docker restart. Without this the
+    # default policy is "no": a restarted LXC came up with the control plane running and
+    # both dependencies exited 255, which reads as a broken install rather than a
+    # stopped database. minio-init stays "no" — it is a one-shot that must not respawn.
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # One-shot init: create the snapshot bucket the restic wrapper (P5) writes to.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/ori-snapshots &&
+      echo 'bucket ori-snapshots ready'"
+    restart: "no"
+
+volumes:
+  pgdata:
+  miniodata:

@@ -1,0 +1,28 @@
+[Unit]
+Description=Install per-ori guest agent and identity from the seed disk
+ConditionPathExists=/dev/vdb
+After=local-fs.target
+Before=ori-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/mkdir -p /run/ori-seed /opt/ori/guest-agent
+# -o ro is load-bearing: the driver attaches the seed drive read-only at the virtio level,
+# and ext4 refuses a read-write mount of a read-only device.
+ExecStart=/bin/sh -c 'mountpoint -q /run/ori-seed || mount -t ext4 -o ro /dev/vdb /run/ori-seed'
+# /opt/ori/guest-agent/ori-agent is where ori-agent.service's ConditionPathExists and
+# ExecStart point — pointing it anywhere else leaves the agent unit dormant.
+#
+# A SYMLINK, not a copy. The agent binary is 91MB, and copying it off the seed disk was
+# measured at 1.767s of guest boot — on the critical path to `ready`, because
+# ori-agent.service is ordered after this unit and the control plane calls a ori ready only
+# once the agent answers. So every create, fork and cold resume paid it. The seed disk stays
+# mounted for the life of the machine (122MB, read-only, already attached) and the agent
+# executes straight from it. `-fn` so a pre-existing real file is replaced rather than
+# turned into a link inside a directory.
+ExecStart=/bin/ln -sfn /run/ori-seed/ori-agent /opt/ori/guest-agent/ori-agent
+ExecStart=/bin/install -m 0644 /run/ori-seed/ori.env /etc/ori.env
+
+[Install]
+WantedBy=multi-user.target

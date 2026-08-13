@@ -1,0 +1,62 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785872530055,
+      "tag": "0000_fearless_havok",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785878378872,
+      "tag": "0001_parched_apocalypse",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785907437222,
+      "tag": "0002_solid_ares",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785934984002,
+      "tag": "0003_amusing_dagger",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785936799852,
+      "tag": "0004_robust_bloodstorm",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785958466856,
+      "tag": "0005_first_the_initiative",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785991748440,
+      "tag": "0006_luxuriant_praxagora",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786079435905,
+      "tag": "0007_snapshot_skip_streak",
+      "breakpoints": true
+    }
+  ]
+}
