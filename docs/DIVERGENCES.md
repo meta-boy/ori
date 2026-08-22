@@ -292,3 +292,39 @@ budget or serialise it.
 
 I hit this myself: a one-off `ori-server` failure I could not reproduce was this
 test, and I nearly wrote it off as noise without identifying it.
+
+## The systemic failure: nobody owned the joins
+
+Three separate times, a component was built correctly, tested, and completely
+unreachable:
+
+| # | Component | Built | Reached by production code |
+|---|---|---|---|
+| 6 | Proxmox provider | yes, UPID polling correct | **no** — server hardcoded `MockProvider` |
+| 8 | Warm pool `PoolManager` | yes, 7 tests incl. 50-way concurrency | **no** — `create` never called `claim()` |
+| — | `register_golden()` | yes | **no** — called only from its own tests |
+
+Each piece passed its own tests. The integration was nobody's deliverable.
+
+The cause is how the work was split, not the agents. Cards were scoped to
+directories specifically so parallel agents would not collide — "you own
+`crates/ori-providers/`", "stay in `pool/`, expose an API rather than editing
+handlers". That successfully prevented merge conflicts and, by exactly the same
+mechanism, guaranteed that every seam between two cards belonged to neither.
+
+Worse, the failures were **silent**. The server started cleanly with
+`provider=proxmox` while running the mock. The pool reported `pool_depth=2` and
+sat empty for 110 seconds without logging a single line. Passing tests plus a
+clean startup log read as a working system.
+
+What would have caught all three cheaply:
+
+- **A card owns a seam, not a directory.** "Wire the pool into create" should
+  have been a deliverable from the start, with a named owner.
+- **Every component that can be inert must say so.** A refill loop with no
+  golden registered should log a warning, not return quietly. A server
+  configured for a provider it is not using should be impossible, not merely
+  unlikely.
+- **The end-to-end test is the acceptance criterion, not a follow-up.** All three
+  were found by running the binaries against real hardware and looking at what
+  actually happened on the host — none by reading code or running unit tests.
