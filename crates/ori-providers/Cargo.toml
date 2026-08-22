@@ -1,6 +1,30 @@
-# Placeholder manifest — owned by C4 (proxmox) / C7 (providers-extra). Replace
-# freely; do not add source here until you own this crate.
 [package]
 name = "ori-providers"
 version.workspace = true
 edition.workspace = true
+description = "Sandbox backends behind cargo features: proxmox (default), docker, firecracker, apple-container. One trait impl per module."
+
+[features]
+default = ["proxmox"]
+# Proxmox LXC backend over the PVE REST API (C4).
+proxmox = ["dep:reqwest"]
+# C7 owns these modules and their feature wiring; the flags exist so the
+# workspace can build `--all-features` and C7 can land without touching C4.
+docker = []
+firecracker = []
+apple-container = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"], optional = true }
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

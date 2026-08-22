@@ -1,6 +1,28 @@
-# Placeholder manifest — owned by C2 (CLI). Replace freely; do not add source
-# here until you own this crate.
 [package]
 name = "ori-cli"
 version.workspace = true
 edition.workspace = true
+description = "The ori client: clap surface plus human and --json rendering."
+
+[lib]
+name = "ori_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ori"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = { version = "0.3", features = ["io"] }
+directories = "5"
+
+[dev-dependencies]
+tempfile = "3"
