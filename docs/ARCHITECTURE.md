@@ -4,13 +4,13 @@ One binary. Three roles. Five crates. Providers behind cargo features.
 
 ## Deliverable shape
 
-A single cross-platform Rust binary, `bx`, that is the client, the server, and
+A single cross-platform Rust binary, `ori`, that is the client, the server, and
 the guest agent depending on how it is invoked:
 
 ```
-ori <sandbox-subcommand>     # client   — macOS/Linux, arm64/x64
-ori serve                # control plane (the backend deliverable)
-ori agent                # guest agent, runs inside each sandbox (linux only)
+ori <command>          # client   — macOS/Linux, arm64/x64
+ori serve              # control plane (the backend deliverable)
+ori agent              # guest agent, runs inside each sandbox (linux only)
 ```
 
 Why one binary: the guest agent must be pushed into every sandbox, the CLI must
