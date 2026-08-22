@@ -42,6 +42,10 @@ pub struct Config {
     pub reconcile_interval: Duration,
     /// Default auto-stop deadline for new sandboxes, in seconds.
     pub default_ttl_seconds: i64,
+    /// Warm pool depth, per `provider × machine type × environment version`.
+    /// `0` disables the pool: `ori new` always takes the cold create path.
+    /// `ORI_POOL_DEPTH` env / `--pool-depth` flag.
+    pub pool_depth: usize,
 }
 
 impl Default for Config {
@@ -54,6 +58,7 @@ impl Default for Config {
             reap_interval: Duration::from_secs(10),
             reconcile_interval: Duration::from_secs(30),
             default_ttl_seconds: 900,
+            pool_depth: 0,
         }
     }
 }
@@ -92,6 +97,11 @@ impl Config {
                 cfg.default_ttl_seconds = n;
             }
         }
+        if let Ok(v) = std::env::var("ORI_POOL_DEPTH") {
+            if let Ok(n) = v.parse::<usize>() {
+                cfg.pool_depth = n;
+            }
+        }
         cfg
     }
 }
@@ -107,6 +117,7 @@ mod tests {
         assert_eq!(cfg.default_ttl_seconds, 900);
         assert_eq!(cfg.domain, "ori.localhost");
         assert_eq!(cfg.provider, ProviderKind::Mock);
+        assert_eq!(cfg.pool_depth, 0, "pool must default to disabled");
     }
 
     #[test]

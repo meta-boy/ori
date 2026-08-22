@@ -2,7 +2,7 @@
 //! process registry, setup runner) and answers control-plane requests.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -49,9 +49,34 @@ impl Agent {
         }
     }
 
+    /// Construct with an explicit state/log directory instead of `~/.ori`.
+    /// Used by tests and by sandbox images that keep the agent state under a
+    /// different root.
+    pub fn with_logs_dir(cfg: Config, logs_dir: PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&logs_dir);
+        let setup = SetupRunner::new(cfg.claim.setup.clone());
+        Self {
+            cfg,
+            claim_env: Mutex::new(HashMap::new()),
+            registry: Arc::new(Mutex::new(Registry::new())),
+            setup,
+            logs_dir,
+        }
+    }
+
     /// The sandbox work dir, as configured.
     pub fn work_dir(&self) -> PathBuf {
         self.cfg.work_dir()
+    }
+
+    /// Apply a claim payload (env vars, secret files, repo checkouts) from the
+    /// config at boot. Commits the claim env only on full success so a failed
+    /// claim does not half-apply.
+    pub async fn apply_claim(&self, claim: &crate::config::Claim) -> Result<(), AgentError> {
+        let mut env_map = self.claim_env.lock().unwrap().clone();
+        crate::inject::apply_claim(claim, &mut env_map).await?;
+        *self.claim_env.lock().unwrap() = env_map;
+        Ok(())
     }
 
     /// Handle one incoming request, sending any number of frames over `tx`.
@@ -99,10 +124,7 @@ impl Agent {
                     }),
                 };
 
-                let mut env_map = self.claim_env.lock().unwrap();
-                let result = crate::inject::apply_claim(&claim, &mut env_map).await;
-                drop(env_map);
-
+                let result = self.apply_claim(&claim).await;
                 match result {
                     Ok(()) => {
                         // Claim applied → the sandbox is ready; kick off setup.
@@ -269,7 +291,7 @@ impl Agent {
         let cmd_owned = cmd.to_vec();
         let wd = workdir.clone();
         let env_owned = env.clone();
-        let task = tokio::spawn(async move {
+        let mut task = tokio::spawn(async move {
             crate::exec::run(&cmd_owned, &wd, &env_owned, timeout, sout, serr).await
         });
 
@@ -320,13 +342,12 @@ impl Agent {
         env: &HashMap<String, String>,
         workdir: &Path,
     ) -> Result<i32, AgentError> {
-        let (pid, child, log_path) =
+        let (pid, mut child, log_path) =
             processes::spawn_child(cmd, env, workdir, &self.logs_dir).await?;
         {
             let mut reg = self.registry.lock().unwrap();
             reg.insert(DetachedProc {
                 pid,
-                started_at: std::time::Instant::now(),
                 state: ProcState::Running,
                 log_path,
             });
@@ -335,7 +356,7 @@ impl Agent {
         tokio::spawn(async move {
             let code = processes::status_code(child.wait().await);
             if let Ok(mut reg) = registry.lock() {
-                processes::record_exit(&mut reg.procs, pid, code);
+                reg.record_exit(pid, code);
             }
         });
         Ok(pid)
@@ -373,10 +394,6 @@ fn encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Re-exported so callers can reference the timeout exit code without reaching
-/// into the wire module.
-pub use crate::wire::EXIT_CODE_TIMED_OUT as EXIT_CODE_TIMEOUT;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +415,8 @@ mod tests {
         .unwrap();
         cfg.claim.env.insert("CLAIMED".into(), "yes".into());
         let agent = Agent::new(cfg);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(agent.apply_claim(&agent.cfg.claim.clone()));
         let env = agent.command_env();
         assert_eq!(env.get("CLAIMED").map(String::as_str), Some("yes"));
         // Inherited env (PATH etc.) is preserved.

@@ -20,7 +20,11 @@
 //! Linux-only in production; `run` refuses to start elsewhere. The crate
 //! compiles everywhere so `cargo test -p ori-agent` can run on a developer
 //! machine, and the pure logic (protocol, backoff, procfs parsing, process
-//! registry) is platform-independent and unit-tested.
+//! registry) is platform-independent and unit-tested. On non-Linux hosts the
+//! agent runtime is intentionally inert, so dead-code analysis is relaxed
+//! there; Linux builds get full dead-code warnings.
+
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 mod backoff;
 mod config;
@@ -38,6 +42,7 @@ mod wire;
 pub use config::{Claim, Config, RepoRef, SecretFile, SetupSpec};
 pub use error::AgentError;
 pub use runtime::Agent;
+pub use wire::{Incoming, Outgoing};
 
 /// Agent entrypoint. Blocks until the process is terminated.
 ///
@@ -56,6 +61,7 @@ pub fn run(config: Option<std::path::PathBuf>) -> Result<(), Box<dyn std::error:
     #[cfg(target_os = "linux")]
     {
         let cfg = Config::load(config)?;
+        let claim = cfg.claim.clone();
         let agent = std::sync::Arc::new(Agent::new(cfg.clone()));
         let cfg = std::sync::Arc::new(cfg);
 
@@ -66,7 +72,12 @@ pub fn run(config: Option<std::path::PathBuf>) -> Result<(), Box<dyn std::error:
                     .enable_all()
                     .build()
                     .map_err(|e| AgentError::Config(format!("cannot build agent runtime: {e}")))?;
-                rt.block_on(tunnel::run(cfg, agent))
+                rt.block_on(async move {
+                    // Apply the claim handed over at claim time before serving
+                    // anything: the sandbox is not ready until secrets land.
+                    agent.apply_claim(&claim).await?;
+                    tunnel::run(cfg, agent).await
+                })
             })?;
 
         match handle.join() {

@@ -63,7 +63,7 @@ pub async fn write_secret_file(path: &Path, contents_b64: &str) -> Result<(), Ag
 
     set_private(path)?;
 
-    verify_private(path).ok_or_else(|| {
+    verify_private(path).map_err(|_| {
         AgentError::Other(format!(
             "secret file {} is not 0600 after write",
             path.display()
@@ -195,6 +195,7 @@ async fn run_git(args: &[String], timeout: Duration) -> Result<(), AgentError> {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use super::*;
 
     #[tokio::test]

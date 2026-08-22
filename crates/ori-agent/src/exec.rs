@@ -141,7 +141,7 @@ pub async fn run(
     drop(err);
 
     let (timed_out, exit_status) = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(status) => (false, status),
+        Ok(status) => (false, status.ok()),
         Err(_elapsed) => {
             kill_group(pid);
             // Reap. `wait` resolves once SIGKILL lands.

@@ -57,6 +57,7 @@ pub enum Incoming {
 
     /// Claim-time configuration: env vars, secret files, repo checkouts, and an
     /// optional setup script. Applied before the sandbox is reported ready.
+    #[serde(rename_all = "camelCase")]
     Apply {
         id: String,
         #[serde(default)]
@@ -71,6 +72,7 @@ pub enum Incoming {
 
     /// Run a command. Mirrors `ori exec <id> <cmd...>` with `--cwd`, `--timeout`,
     /// `--detach`, and request-scoped env.
+    #[serde(rename_all = "camelCase")]
     Exec {
         id: String,
         /// argv, e.g. `["sh", "-c", "curl ..."]`. Never empty.
@@ -88,10 +90,12 @@ pub enum Incoming {
     },
 
     /// Poll a previously detached process (`ori exec --status <pid>`).
+    #[serde(rename_all = "camelCase")]
     ExecStatus { id: String, pid: i64 },
 
     /// Register a port for reverse proxying and report whether anything is
     /// actually listening on it (and whether it is loopback-only).
+    #[serde(rename_all = "camelCase")]
     Host {
         id: String,
         port: u16,
@@ -136,6 +140,7 @@ pub struct SetupMsg {
 pub enum Outgoing {
     /// Sent immediately after the WebSocket connects. Authenticates the tunnel
     /// and lets the plane route the connection to the right sandbox.
+    #[serde(rename_all = "camelCase")]
     Hello {
         #[serde(default)]
         sandbox_id: Option<String>,
@@ -146,9 +151,11 @@ pub enum Outgoing {
     },
 
     /// Reply to `ping`.
+    #[serde(rename_all = "camelCase")]
     Ack { id: String },
 
     /// Result of `apply`.
+    #[serde(rename_all = "camelCase")]
     ApplyResult {
         id: String,
         ok: bool,
@@ -158,6 +165,7 @@ pub enum Outgoing {
 
     /// A chunk of a running command's output. `fd` is 1 (stdout) or 2 (stderr);
     /// data is base64.
+    #[serde(rename_all = "camelCase")]
     Stream {
         id: String,
         fd: u8,
@@ -165,6 +173,7 @@ pub enum Outgoing {
     },
 
     /// Terminal result of an `exec` request.
+    #[serde(rename_all = "camelCase")]
     ExecResult {
         id: String,
         /// Agent-side process id (0 when the command never spawned).
@@ -187,6 +196,7 @@ pub enum Outgoing {
     /// Result of `execStatus`. `state` is one of `running|exited|lost`.
     /// `lost` means the agent no longer has the process — it may have
     /// restarted under the pid, or the pid was never one of ours.
+    #[serde(rename_all = "camelCase")]
     ExecStatusResult {
         id: String,
         state: String,
@@ -198,6 +208,7 @@ pub enum Outgoing {
 
     /// Result of `host`, and the registration itself: the plane sets up the
     /// reverse proxy for the port and records the listening report.
+    #[serde(rename_all = "camelCase")]
     HostResult {
         id: String,
         listening: bool,
@@ -212,6 +223,7 @@ pub enum Outgoing {
     /// Proactive setup-script status. `status` is one of
     /// `pending|running|done|failed`; `error` is the failure detail for
     /// `failed` (mirrors the sandbox's `setupStatus`/`setupError` fields).
+    #[serde(rename_all = "camelCase")]
     SetupStatus {
         status: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -220,6 +232,7 @@ pub enum Outgoing {
 
     /// A request failed at the transport/parse/spawn level. Carries the request
     /// id when the failure is tied to one.
+    #[serde(rename_all = "camelCase")]
     Error {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,

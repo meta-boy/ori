@@ -162,7 +162,6 @@ fn hostname() -> Option<String> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::ffi::OsStrExt;
         if unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } == 0 {
             let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
             if len > 0 {

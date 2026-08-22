@@ -229,6 +229,113 @@ async fn released_slot_is_destroyed_not_returned_to_the_pool() {
 }
 
 // ---------------------------------------------------------------------------
+// Reconcile + drain
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reconcile_drops_slots_whose_instance_is_gone_and_orphaned_claims() {
+    let db = test_db().await;
+    let provider = Arc::new(MockProvider::new());
+    let pm = PoolManager::new(db.clone(), provider.clone(), PoolConfig::default());
+    let key = key();
+
+    let slot_a = seed_slot(&db, &provider, &key, "a").await;
+    let slot_b = seed_slot(&db, &provider, &key, "b").await;
+    let slot_c = seed_slot(&db, &provider, &key, "c").await;
+
+    // distinct created_at so claims are deterministic (claim takes the oldest)
+    sqlx::query("UPDATE pool_slots SET created_at = '2026-01-01T00:00:02Z' WHERE id = ?")
+        .bind(&slot_a)
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE pool_slots SET created_at = '2026-01-01T00:00:01Z' WHERE id = ?")
+        .bind(&slot_b)
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE pool_slots SET created_at = '2026-01-01T00:00:00Z' WHERE id = ?")
+        .bind(&slot_c)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    // slot C is claimed for a sandbox that does not exist (crash between
+    // claim and registration)
+    let claim = pm.claim(&key, "gone-sandbox").await.unwrap();
+    assert!(matches!(claim, ClaimResult::Hit(s) if s.slot_id == slot_c));
+
+    // slot B's instance is destroyed behind the pool's back
+    let (handle_b,): (String,) =
+        sqlx::query_as::<_, (String,)>("SELECT instance_handle FROM pool_slots WHERE id = ?")
+            .bind(&slot_b)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    provider
+        .destroy(&InstanceHandle {
+            provider: "mock".into(),
+            id: handle_b.clone(),
+        })
+        .await
+        .unwrap();
+
+    let destroys_before = provider.registry.lock().unwrap().destroy_calls;
+    pm.reconcile().await.unwrap();
+
+    // B dropped (provider no longer has it — never handed out), C released
+    // (orphaned claim), A survives untouched.
+    let remaining: Vec<String> =
+        sqlx::query_as::<_, (String,)>("SELECT id FROM pool_slots ORDER BY id")
+            .fetch_all(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(i,)| i)
+            .collect();
+    assert_eq!(
+        remaining,
+        vec![slot_a.clone()],
+        "stale slots must be dropped"
+    );
+
+    // reconcile destroyed exactly the orphaned claim's container
+    assert_eq!(
+        provider.registry.lock().unwrap().destroy_calls,
+        destroys_before + 1
+    );
+    assert!(!provider
+        .registry
+        .lock()
+        .unwrap()
+        .instances
+        .contains_key(&handle_b));
+}
+
+#[tokio::test]
+async fn drain_destroys_every_pool_instance_on_shutdown() {
+    let db = test_db().await;
+    let provider = Arc::new(MockProvider::new());
+    let pm = PoolManager::new(db.clone(), provider.clone(), PoolConfig::default());
+    let key = key();
+
+    for t in ["a", "b", "c"] {
+        seed_slot(&db, &provider, &key, t).await;
+    }
+    assert_eq!(pm.available_count(&key).await.unwrap(), 3);
+
+    let n = pm.drain().await.unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(provider.registry.lock().unwrap().destroy_calls, 3);
+    assert!(provider.registry.lock().unwrap().instances.is_empty());
+    let (left,): (i64,) = sqlx::query_as("SELECT count(*) FROM pool_slots")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Refill clones from the golden snapshot
 // ---------------------------------------------------------------------------
 

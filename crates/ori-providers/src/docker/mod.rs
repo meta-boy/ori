@@ -102,9 +102,19 @@ pub struct DockerConfig {
     /// runtime. Off by default.
     #[serde(default)]
     pub privileged: bool,
+    /// Override the image's `Cmd` with `sleep infinity` so the container stays
+    /// running as a sandbox (docker's default image CMDs like `/bin/sh` exit
+    /// immediately, leaving a `Stopped` instance). On by default; set false to
+    /// let the image's own process define the container lifecycle.
+    #[serde(default = "default_keep_alive")]
+    pub keep_alive: bool,
     /// Default `exec` timeout in seconds (default 60).
     #[serde(default = "default_exec_timeout_secs")]
     pub exec_timeout_secs: u64,
+}
+
+fn default_keep_alive() -> bool {
+    true
 }
 
 impl DockerConfig {
@@ -121,6 +131,10 @@ impl DockerConfig {
                 .unwrap_or_else(|_| default_snapshot_repo()),
             network: std::env::var("ORI_DOCKER_NETWORK").ok(),
             privileged: truthy(std::env::var("ORI_DOCKER_PRIVILEGED")),
+            keep_alive: {
+                let v = std::env::var("ORI_DOCKER_KEEP_ALIVE").ok();
+                v.map(|s| truthy(Ok(s))).unwrap_or(true)
+            },
             exec_timeout_secs: std::env::var("ORI_DOCKER_EXEC_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -172,19 +186,24 @@ impl DockerProvider {
 
     /// The image a given spec creates from: `spec.template` is the instance's
     /// image (the server fills it from config); fall back to `config.image`.
-    fn image_for(&self, spec: &InstanceSpec) -> &str {
+    fn image_for(&self, spec: &InstanceSpec) -> String {
         if spec.template.is_empty() {
-            &self.config.image
+            self.config.image.clone()
         } else {
-            &spec.template
+            spec.template.clone()
         }
     }
 
     async fn image_present(&self, image: &str) -> Result<bool, Error> {
         match self.docker.inspect_image(image).await {
             Ok(_) => Ok(true),
-            Err(e) if DockerError::from_bollard(e).status() == Some(404) => Ok(false),
-            Err(e) => Err(map_err(DockerError::from_bollard(e))),
+            Err(e) => {
+                let de = DockerError::from_bollard(e);
+                match de.status() {
+                    Some(404) => Ok(false),
+                    _ => Err(map_err(de)),
+                }
+            }
         }
     }
 
@@ -205,9 +224,15 @@ impl DockerProvider {
     /// The create body for an instance: machine-type resource limits, hostname,
     /// and an identifying label. The image varies per call site.
     fn container_body(&self, spec: &InstanceSpec, image: &str) -> ContainerCreateBody {
+        let cmd = if self.config.keep_alive {
+            Some(vec!["sleep".to_string(), "infinity".to_string()])
+        } else {
+            None
+        };
         ContainerCreateBody {
             image: Some(image.to_string()),
             hostname: Some(spec.name.clone()),
+            cmd,
             tty: Some(false),
             open_stdin: Some(false),
             attach_stdout: Some(false),
@@ -301,7 +326,7 @@ impl DockerProvider {
     }
 
     /// Create the instance's container (unstarted). Shared by create/clone/rollback.
-    async fn recreate_container(&self, name: &str, image: &str, body: ContainerCreateBody) -> Result<(), Error> {
+    async fn recreate_container(&self, name: &str, body: ContainerCreateBody) -> Result<(), Error> {
         let options = CreateContainerOptionsBuilder::default().name(name).build();
         self.docker
             .create_container(Some(options), body)
@@ -369,9 +394,9 @@ impl Provider for DockerProvider {
     /// name).
     async fn create(&self, spec: &InstanceSpec) -> Result<InstanceHandle, Error> {
         let image = self.image_for(spec);
-        self.ensure_image(image).await?;
+        self.ensure_image(&image).await?;
         let name = container_name_for(&spec.id);
-        self.create_container_from_image(&name, image, spec).await?;
+        self.create_container_from_image(&name, &image, spec).await?;
         self.docker
             .start_container(&name, None)
             .await
@@ -471,7 +496,7 @@ impl Provider for DockerProvider {
             .map_err(|e| map_err(DockerError::from_bollard(e)))?;
         let hc = current.host_config.unwrap_or_default();
         let body = ContainerCreateBody {
-            image: Some(image),
+            image: Some(image.clone()),
             hostname: current
                 .config
                 .and_then(|c| c.hostname)
@@ -492,10 +517,14 @@ impl Provider for DockerProvider {
         let options = RemoveContainerOptionsBuilder::default().force(true).build();
         match self.docker.remove_container(&name, Some(options)).await {
             Ok(()) => {}
-            Err(e) if DockerError::from_bollard(e).status() == Some(404) => {}
-            Err(e) => return Err(map_err(DockerError::from_bollard(e))),
+            Err(e) => {
+                let de = DockerError::from_bollard(e);
+                if de.status() != Some(404) {
+                    return Err(map_err(de));
+                }
+            }
         }
-        self.recreate_container(&name, &image, body).await
+        self.recreate_container(&name, body).await
     }
 
     /// Idempotent: deleting a missing snapshot is `Ok`. `force` untags even if

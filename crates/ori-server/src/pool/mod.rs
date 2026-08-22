@@ -440,7 +440,7 @@ impl PoolManager {
                             "pool refill: start failed; destroying clone");
                         let _ = self.provider.destroy(&h).await;
                     } else {
-                        let _ = sqlx::query(
+                        let inserted = sqlx::query(
                             "INSERT INTO pool_slots (id, pool_key, instance_handle, state, created_at) \
                              VALUES (?, ?, ?, 'available', ?)",
                         )
@@ -450,7 +450,15 @@ impl PoolManager {
                         .bind(now_ts())
                         .execute(&self.db)
                         .await;
-                        added += 1;
+                        match inserted {
+                            Ok(_) => added += 1,
+                            Err(e) => {
+                                // never leave a cloned-but-unlisted instance behind
+                                tracing::warn!(key = %key.key_string(), handle = %h.id, error = %e,
+                                    "pool refill: insert failed; destroying clone");
+                                let _ = self.provider.destroy(&h).await;
+                            }
+                        }
                     }
                 }
                 Err(e) => {

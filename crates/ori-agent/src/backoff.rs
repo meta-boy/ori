@@ -105,14 +105,32 @@ mod tests {
     fn base_delay_grows_exponentially_up_to_cap() {
         let mut b = Backoff::with_seed(Duration::from_millis(100), Duration::from_secs(2), 2.0, 7);
         assert_eq!(b.base_ms(), 100);
-        assert_eq!(b.next().as_millis() as u64, b.base_ms().min(2000));
-        assert!(b.base_ms() >= 200 && b.base_ms() <= 2000);
+        b.next();
+        assert_eq!(b.base_ms(), 200);
+        b.next();
+        assert_eq!(b.base_ms(), 400);
+        b.next();
+        assert_eq!(b.base_ms(), 800);
+        b.next();
+        assert_eq!(b.base_ms(), 1600);
+        b.next();
+        assert_eq!(b.base_ms(), 2000, "base caps at max");
         // Pump many attempts; the base must never exceed the cap.
         for _ in 0..40 {
             let _ = b.next();
             assert!(b.base_ms() <= 2000);
         }
         assert_eq!(b.base_ms(), 2000);
+    }
+
+    #[test]
+    fn each_draw_stays_within_current_base() {
+        let mut b = Backoff::with_seed(Duration::from_millis(100), Duration::from_secs(1), 2.0, 11);
+        for _ in 0..20 {
+            let base = b.base_ms();
+            let draw = b.next().as_millis() as u64;
+            assert!(draw <= base, "draw {draw} must be <= base {base}");
+        }
     }
 
     #[test]

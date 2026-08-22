@@ -47,6 +47,14 @@ inside the sandbox and were scoped out of v1 deliberately.
 lifecycle — create, exec, snapshot, stop, resume, fork, delete — is real and
 measured. The access and account-management commands are not built.
 
+## Release binary — verified
+
+`cargo build --release` produces a single **10.3 MB** `ori` binary (22 MB debug).
+Smoke-tested end to end from macOS arm64 against the live host: it served the
+control plane on the Proxmox provider, created a real container in **8.49 s**,
+and `exec` returned `Linux x86_64` — so the whole chain is genuine, from an
+arm64 macOS client through the control plane into an x86_64 Linux container.
+
 ## Warm pool foundation — verified
 
 `scripts/golden-clone-check.sh --vmid 9501` against the live host:

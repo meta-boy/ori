@@ -11,7 +11,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use crate::error::AgentError;
 use crate::exec::exit_code_of;
@@ -31,7 +30,6 @@ pub enum ProcState {
 #[derive(Debug, Clone)]
 pub struct DetachedProc {
     pub pid: i32,
-    pub started_at: Instant,
     pub state: ProcState,
     pub log_path: PathBuf,
 }
@@ -61,10 +59,6 @@ impl Registry {
         self.procs.insert(proc.pid, proc);
     }
 
-    pub fn get_mut(&mut self, pid: i32) -> Option<&mut DetachedProc> {
-        self.procs.get_mut(&pid)
-    }
-
     /// Answer a status poll for `pid`.
     pub fn status(&self, pid: i32) -> ProcStatus {
         match self.procs.get(&pid) {
@@ -73,6 +67,13 @@ impl Registry {
                 ProcState::Exited(code) => ProcStatus::Exited(code),
             },
             None => ProcStatus::Lost,
+        }
+    }
+
+    /// Record that a detached child exited. Called from the monitor task.
+    pub fn record_exit(&mut self, pid: i32, code: i32) {
+        if let Some(p) = self.procs.get_mut(&pid) {
+            p.state = ProcState::Exited(code);
         }
     }
 
@@ -146,14 +147,6 @@ pub fn tail_file(path: &Path, max_bytes: u64) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Update a registry entry's state after a detached child exits. Called from
-/// the monitor task.
-pub fn record_exit(procs: &mut HashMap<i32, DetachedProc>, pid: i32, code: i32) {
-    if let Some(p) = procs.get_mut(&pid) {
-        p.state = ProcState::Exited(code);
-    }
-}
-
 /// Normalize a wait result into a status code.
 pub fn status_code(status: std::io::Result<std::process::ExitStatus>) -> i32 {
     match status {
@@ -190,10 +183,6 @@ fn open_append_0600(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new().create(true).append(true).open(path)
 }
 
-/// Give the child a head start to reach its new process group before a test
-/// inspects state.
-pub const POLL_INTERVAL: Duration = Duration::from_millis(20);
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,12 +209,11 @@ mod tests {
         let mut reg = Registry::new();
         reg.insert(DetachedProc {
             pid: 7,
-            started_at: Instant::now(),
             state: ProcState::Running,
             log_path: PathBuf::from("/tmp/x.log"),
         });
         assert_eq!(reg.status(7), ProcStatus::Running);
-        reg.get_mut(7).unwrap().state = ProcState::Exited(3);
+        reg.record_exit(7, 3);
         assert_eq!(reg.status(7), ProcStatus::Exited(3));
     }
 }

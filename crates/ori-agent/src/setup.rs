@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
@@ -52,7 +52,7 @@ impl SetupState {
 /// Tracks and runs the setup script.
 pub struct SetupRunner {
     spec: Option<SetupSpec>,
-    state: Mutex<SetupState>,
+    state: Arc<Mutex<SetupState>>,
     started: AtomicBool,
 }
 
@@ -67,7 +67,7 @@ impl SetupRunner {
         };
         Self {
             spec,
-            state: Mutex::new(state),
+            state: Arc::new(Mutex::new(state)),
             started: AtomicBool::new(false),
         }
     }
@@ -208,16 +208,12 @@ async fn run_script(path: &Path, log_path: &Path) -> ScriptOutcome {
 
     match log {
         Ok(f) => {
-            let err = f.try_clone().unwrap_or_else(|_| {
-                std::fs::OpenOptions::new().open(log_path).ok()
-            });
-            let err_handle = err.ok();
+            let err_handle = f.try_clone().ok();
             cmd.stdout(std::process::Stdio::from(f));
-            if let Some(e) = err_handle {
-                cmd.stderr(std::process::Stdio::from(e));
-            } else {
-                cmd.stderr(std::process::Stdio::null());
-            }
+            match err_handle {
+                Some(e) => cmd.stderr(std::process::Stdio::from(e)),
+                None => cmd.stderr(std::process::Stdio::null()),
+            };
         }
         Err(_) => {
             cmd.stdout(std::process::Stdio::null());
@@ -253,6 +249,7 @@ fn open_append_0600(path: &Path) -> std::io::Result<std::fs::File> {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use super::*;
 
     fn spec(script: &str) -> SetupSpec {
@@ -328,7 +325,7 @@ mod tests {
             }
         }
         let err = saw.expect("oversized script must report failed");
-        assert!(err.contains("64"), "got: {err}");
+        assert!(err.contains("65536"), "got: {err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

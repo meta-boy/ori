@@ -279,7 +279,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            Config::load(Some(path)),
+            Config::load(Some(path.clone())),
             Err(AgentError::Config(_))
         ));
         std::fs::write(

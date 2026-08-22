@@ -12,5 +12,17 @@ pub use reconcile::Error;
 #[cfg(feature = "proxmox")]
 pub mod proxmox;
 
+#[cfg(feature = "docker")]
+pub mod docker;
+
+#[cfg(feature = "firecracker")]
+pub mod firecracker;
+
+#[cfg(feature = "apple-container")]
+pub mod apple_container;
+
+/// Construct providers by name and surface their capabilities.
+pub mod registry;
+
 /// Convenience alias matching the shared error type name.
 pub type ProviderError = Error;
