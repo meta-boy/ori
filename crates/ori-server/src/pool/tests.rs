@@ -9,6 +9,8 @@
 //!   against a provider with injected latency.
 
 use std::collections::HashSet;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,27 +22,25 @@ use super::{ClaimResult, PoolConfig, PoolKey, PoolManager};
 use crate::db;
 use crate::mock::MockProvider;
 use crate::proto::{
-    Addresses, Capabilities, ExecRequest, ExecResult, InstanceHandle, InstanceSpec,
-    InstanceStatus, MachineType, Provider, ProviderError, SnapshotRef, StopMode,
+    Addresses, Capabilities, ExecRequest, ExecResult, InstanceHandle, InstanceSpec, InstanceStatus,
+    MachineType, Provider, ProviderError, SnapshotRef, StopMode,
 };
 use crate::util::now_ts;
 
+/// Sequential suffix so every test gets its own shared in-memory database —
+/// parallel tests must never share (or clobber) a backing store.
+static DB_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// A multi-connection database for tests that genuinely exercise concurrent
-/// writers. In-memory databases are per-connection, so these use a throwaway
-/// temp file with WAL and a real pool.
+/// writers. Plain `:memory:` is per-connection, so these use a **named**
+/// shared-cache in-memory database (`file:<name>?mode=memory&cache=shared`):
+/// every connection in the pool sees the same DB, no two tests share a name,
+/// and there is no temp file to collide on.
 async fn test_db() -> SqlitePool {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "ori-pool-test-{}-{nanos}.db",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    let opts = SqliteConnectOptions::new()
-        .filename(&path)
-        .create_if_missing(true)
+    let seq = DB_SEQ.fetch_add(1, Ordering::SeqCst);
+    let uri = format!("sqlite:file:ori_pool_test_{seq}?mode=memory&cache=shared");
+    let opts = SqliteConnectOptions::from_str(&uri)
+        .expect("shared in-memory uri")
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(15));
     let pool = SqlitePoolOptions::new()
@@ -251,14 +251,15 @@ async fn refill_clones_from_the_golden_and_serves_running_instances() {
 
     // the pool is filled by cloning from the golden — never a cold create —
     // and every instance is already started
-    let reg = provider.registry.lock().unwrap();
-    assert_eq!(reg.create_calls, 0, "refill must not cold-create");
-    assert_eq!(reg.instances.len(), 10);
-    assert!(reg
-        .instances
-        .values()
-        .all(|i| i.state == InstanceStatus::Running));
-    drop(reg);
+    {
+        let reg = provider.registry.lock().unwrap();
+        assert_eq!(reg.create_calls, 0, "refill must not cold-create");
+        assert_eq!(reg.instances.len(), 10);
+        assert!(reg
+            .instances
+            .values()
+            .all(|i| i.state == InstanceStatus::Running));
+    }
 
     // a second pass tops nothing up
     let added = pm.refill_key(&key).await.unwrap();
@@ -332,7 +333,11 @@ impl Provider for LatencyProvider {
     async fn snapshot_delete(&self, s: &SnapshotRef) -> Result<(), ProviderError> {
         self.inner.snapshot_delete(s).await
     }
-    async fn exec(&self, h: &InstanceHandle, req: &ExecRequest) -> Result<ExecResult, ProviderError> {
+    async fn exec(
+        &self,
+        h: &InstanceHandle,
+        req: &ExecRequest,
+    ) -> Result<ExecResult, ProviderError> {
         tokio::time::sleep(self.exec_delay).await;
         self.inner.exec(h, req).await
     }
@@ -349,7 +354,10 @@ async fn claim_path_stays_under_the_one_point_five_second_budget() {
     let db = test_db().await;
     // 300 ms per exec round trip, i.e. a backend slower than the measured
     // 0.90 s `pct exec` floor (docs/BENCHMARKS.md).
-    let lp = Arc::new(LatencyProvider::new(MockProvider::new(), Duration::from_millis(300)));
+    let lp = Arc::new(LatencyProvider::new(
+        MockProvider::new(),
+        Duration::from_millis(300),
+    ));
     let provider: Arc<dyn Provider> = lp.clone();
     let pm = PoolManager::new(db, provider.clone(), PoolConfig::default());
     let key = key();
@@ -394,8 +402,16 @@ fn pool_key_round_trips() {
     let k = key();
     let parsed = PoolKey::parse(&k.key_string()).unwrap();
     assert_eq!(parsed, k);
-    assert_eq!(PoolKey::parse("proxmox|large|3").unwrap().machine_type, MachineType::Large);
-    assert_eq!(PoolKey::parse("proxmox|large|3").unwrap().environment_version, 3);
+    assert_eq!(
+        PoolKey::parse("proxmox|large|3").unwrap().machine_type,
+        MachineType::Large
+    );
+    assert_eq!(
+        PoolKey::parse("proxmox|large|3")
+            .unwrap()
+            .environment_version,
+        3
+    );
     assert!(PoolKey::parse("not-a-key").is_err());
     assert!(PoolKey::parse("proxmox|bogus|1").is_err());
     assert!(PoolKey::parse("proxmox|default|").is_err());

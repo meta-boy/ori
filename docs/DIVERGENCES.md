@@ -236,3 +236,30 @@ when each crate needed one. This is the same root cause as bug 2
 (`memoryGb`/`memoryGB`) — a shared contract that was specified in prose and then
 implemented twice. Collapsing it removes an entire class of failure instead of
 fixing two instances of it.
+
+### 8. The warm pool is built and correct, but not wired into `new`
+
+`crates/ori-server/src/pool/` implements `PoolManager` and its 5 tests pass,
+including the two that matter most:
+
+- `fifty_concurrent_claims_against_ten_slots_yield_exactly_ten_winners` — the
+  atomic single-statement claim holds under real concurrency (the test uses a
+  multi-connection pool; a single-connection one would serialise and pass falsely)
+- `released_slot_is_destroyed_not_returned_to_the_pool` — tenant isolation
+
+But `routes/sandboxes.rs` contains no reference to the pool, so `ori new` still
+takes the cold path at 9.2 s instead of claiming a pre-started container at
+~0.9 s. The pool is dead code until the create handler calls it.
+
+**Cause is an orchestration mistake, not an agent mistake.** The pool card was
+told to "expose a PoolManager API rather than rewriting handlers" so it would
+not collide with the integration agent editing the same crate. That kept the
+two agents apart and left the seam unowned — the same shape as bug 6, where the
+Proxmox provider was complete and unreachable.
+
+The lesson worth keeping: when work is split to avoid a merge conflict,
+something must explicitly own the join, or the join silently belongs to nobody.
+
+Remaining work: `create_sandbox` tries `pool.claim(key)` first, falls back to the
+cold path on a miss, and emits `cloning` in the event stream either way so a miss
+is visible rather than just slow.

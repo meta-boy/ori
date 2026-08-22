@@ -13,11 +13,21 @@ pub enum AgentError {
     #[error("tunnel: {0}")]
     Tunnel(String),
 
-    #[error("request {id}: {0}")]
-    Request { id: String, #[source] source: Box<AgentError> },
+    #[error("request {id}: {source}")]
+    Request {
+        id: String,
+        #[source]
+        source: Box<AgentError>,
+    },
 
     #[error("{0}")]
     Other(String),
+}
+
+impl<T> From<tokio::sync::mpsc::error::SendError<T>> for AgentError {
+    fn from(e: tokio::sync::mpsc::error::SendError<T>) -> Self {
+        AgentError::Tunnel(format!("tunnel closed: {e}"))
+    }
 }
 
 impl AgentError {

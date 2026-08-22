@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use crate::procfs::{classify_hex, BindKind, ListenEntry, parse_tcp_line};
+use crate::procfs::BindKind;
 
 /// Result of probing a port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,16 +83,4 @@ pub async fn probe(port: u16) -> HostProbe {
             note: Some(format!("nothing is listening on port {port}")),
         }
     }
-}
-
-/// Convenience for callers that want to probe from a non-Linux host in tests:
-/// classify procfs table text exactly as the Linux reader would.
-pub fn classify_hex(hex: &str) -> BindKind {
-    classify_hex(hex)
-}
-
-/// Parse a `/proc/net/tcp` line without touching the filesystem (used by tests
-/// and by the reader).
-pub fn parse_tcp_line(line: &str) -> Option<ListenEntry> {
-    parse_tcp_line(line)
 }

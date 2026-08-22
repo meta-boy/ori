@@ -74,7 +74,9 @@ impl PoolKey {
             .map_err(|e| PoolError::InvalidKey(s.to_string(), e))?;
         let version = parts
             .next()
-            .ok_or_else(|| PoolError::InvalidKey(s.to_string(), "missing environment_version".into()))?
+            .ok_or_else(|| {
+                PoolError::InvalidKey(s.to_string(), "missing environment_version".into())
+            })?
             .parse::<i64>()
             .map_err(|e| PoolError::InvalidKey(s.to_string(), e.to_string()))?;
         if parts.next().is_some() {
@@ -250,12 +252,14 @@ impl PoolManager {
         snapshot: &SnapshotRef,
     ) -> Result<bool, PoolError> {
         let lock_key = format!("golden:{}", key.key_string());
-        let res = sqlx::query("INSERT OR IGNORE INTO pool_locks (key, holder, created_at) VALUES (?, ?, ?)")
-            .bind(&lock_key)
-            .bind("golden-rebuild")
-            .bind(now_ts())
-            .execute(&self.db)
-            .await?;
+        let res = sqlx::query(
+            "INSERT OR IGNORE INTO pool_locks (key, holder, created_at) VALUES (?, ?, ?)",
+        )
+        .bind(&lock_key)
+        .bind("golden-rebuild")
+        .bind(now_ts())
+        .execute(&self.db)
+        .await?;
         if res.rows_affected() == 0 {
             return Ok(false);
         }
@@ -327,12 +331,11 @@ impl PoolManager {
     /// well enough to hand to a different tenant is not a thing to be clever
     /// about. Idempotent: releasing an already-released slot is a no-op.
     pub async fn release(&self, slot_id: &str) -> Result<(), PoolError> {
-        let claimed: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM pool_slots WHERE id = ? AND state = 'claimed'",
-        )
-        .bind(slot_id)
-        .fetch_optional(&self.db)
-        .await?;
+        let claimed: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM pool_slots WHERE id = ? AND state = 'claimed'")
+                .bind(slot_id)
+                .fetch_optional(&self.db)
+                .await?;
         if claimed.is_none() {
             return Ok(());
         }
@@ -507,10 +510,11 @@ impl PoolManager {
             state: String,
             claimed_by: Option<String>,
         }
-        let rows: Vec<SlotRow> =
-            sqlx::query_as("SELECT id, pool_key, instance_handle, state, claimed_by FROM pool_slots")
-                .fetch_all(&self.db)
-                .await?;
+        let rows: Vec<SlotRow> = sqlx::query_as(
+            "SELECT id, pool_key, instance_handle, state, claimed_by FROM pool_slots",
+        )
+        .fetch_all(&self.db)
+        .await?;
         for row in rows {
             let key = match PoolKey::parse(&row.pool_key) {
                 Ok(k) => k,
@@ -592,12 +596,11 @@ impl PoolManager {
 
     /// Destroy every slot for one key (superseded version). Never reused.
     pub async fn drain_key(&self, key: &PoolKey) -> Result<usize, PoolError> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, instance_handle FROM pool_slots WHERE pool_key = ?",
-        )
-        .bind(key.key_string())
-        .fetch_all(&self.db)
-        .await?;
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, instance_handle FROM pool_slots WHERE pool_key = ?")
+                .bind(key.key_string())
+                .fetch_all(&self.db)
+                .await?;
         let n = rows.len();
         for (id, handle) in rows {
             let _ = self
