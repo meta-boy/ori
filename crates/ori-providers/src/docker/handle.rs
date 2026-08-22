@@ -175,7 +175,13 @@ mod tests {
     #[test]
     fn machine_sizing_matches_trait_numbers() {
         assert_eq!(nano_cpus_for(&MachineType::Small), 2_000_000_000);
-        assert_eq!(memory_bytes_for(&MachineType::Small), 4 * 1024 * 1024 * 1024);
-        assert_eq!(memory_bytes_for(&MachineType::Large), 16 * 1024 * 1024 * 1024);
+        assert_eq!(
+            memory_bytes_for(&MachineType::Small),
+            4 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            memory_bytes_for(&MachineType::Large),
+            16 * 1024 * 1024 * 1024
+        );
     }
 }

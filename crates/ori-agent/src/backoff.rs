@@ -64,7 +64,11 @@ impl Backoff {
     pub fn next(&mut self) -> Duration {
         let base = self.base_ms();
         self.attempt = self.attempt.saturating_add(1);
-        let ms = if base == 0 { 0 } else { self.rng.next_u64_below(base) };
+        let ms = if base == 0 {
+            0
+        } else {
+            self.rng.next_u64_below(base)
+        };
         Duration::from_millis(ms)
     }
 

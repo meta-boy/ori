@@ -29,9 +29,7 @@ pub struct HostProbe {
 pub async fn probe(port: u16) -> HostProbe {
     if let Ok(entries) = crate::procfs::listening_on_port(port) {
         if !entries.is_empty() {
-            let any_public = entries
-                .iter()
-                .any(|e| e.kind == BindKind::Wildcard);
+            let any_public = entries.iter().any(|e| e.kind == BindKind::Wildcard);
             let all_loopback = entries.iter().all(|e| e.kind == BindKind::Loopback);
             if any_public {
                 return HostProbe {

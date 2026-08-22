@@ -53,9 +53,7 @@ pub fn run(config: Option<std::path::PathBuf>) -> Result<(), Box<dyn std::error:
     #[cfg(not(target_os = "linux"))]
     {
         let _ = config;
-        Err(
-            "ori agent runs inside Linux sandboxes and is not available on this platform".into(),
-        )
+        Err("ori agent runs inside Linux sandboxes and is not available on this platform".into())
     }
 
     #[cfg(target_os = "linux")]

@@ -213,7 +213,9 @@ impl DockerProvider {
             return Ok(());
         }
         tracing::info!("docker: pulling {image}");
-        let options = CreateImageOptionsBuilder::default().from_image(image).build();
+        let options = CreateImageOptionsBuilder::default()
+            .from_image(image)
+            .build();
         let mut stream = self.docker.create_image(Some(options), None, None);
         while let Some(item) = stream.next().await {
             item.map_err(|e| map_err(DockerError::from_bollard(e)))?;
@@ -241,7 +243,11 @@ impl DockerProvider {
             open_stdin: Some(false),
             attach_stdout: Some(false),
             attach_stderr: Some(false),
-            labels: Some([("ori.instance_id".to_string(), spec.id.clone())].into_iter().collect()),
+            labels: Some(
+                [("ori.instance_id".to_string(), spec.id.clone())]
+                    .into_iter()
+                    .collect(),
+            ),
             host_config: Some(HostConfig {
                 nano_cpus: Some(nano_cpus_for(&spec.machine_type)),
                 memory: Some(memory_bytes_for(&spec.machine_type)),
@@ -288,7 +294,11 @@ impl DockerProvider {
     async fn collect_exec(&self, exec_id: &str) -> Result<(Vec<u8>, Vec<u8>), Error> {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        match self.docker.start_exec(exec_id, None::<StartExecOptions>).await {
+        match self
+            .docker
+            .start_exec(exec_id, None::<StartExecOptions>)
+            .await
+        {
             Ok(StartExecResults::Attached { mut output, .. }) => {
                 while let Some(item) = output.next().await {
                     match item {
@@ -400,7 +410,8 @@ impl Provider for DockerProvider {
         let image = self.image_for(spec);
         self.ensure_image(&image).await?;
         let name = container_name_for(&spec.id);
-        self.create_container_from_image(&name, &image, spec).await?;
+        self.create_container_from_image(&name, &image, spec)
+            .await?;
         self.docker
             .start_container(&name, None)
             .await
@@ -417,7 +428,8 @@ impl Provider for DockerProvider {
     ) -> Result<InstanceHandle, Error> {
         let image = parse_snapshot_ref(src).map_err(map_err)?;
         let name = container_name_for(&spec.id);
-        self.create_container_from_image(&name, &image, spec).await?;
+        self.create_container_from_image(&name, &image, spec)
+            .await?;
         Ok(handle_for(&spec.id))
     }
 
@@ -562,7 +574,12 @@ impl Provider for DockerProvider {
         let started_at = Instant::now();
         let exec_config = CreateExecOptions {
             cmd: Some(req.command),
-            env: Some(req.env.into_iter().map(|(k, v)| format!("{k}={v}")).collect()),
+            env: Some(
+                req.env
+                    .into_iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect(),
+            ),
             working_dir: req.workdir,
             attach_stdout: Some(true),
             attach_stderr: Some(true),

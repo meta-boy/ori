@@ -13,8 +13,8 @@
 mod common;
 mod conformance;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use ori_providers::proxmox::ProxmoxProvider;
 use ori_providers::reconcile::{InstanceSpec, MachineType};
@@ -23,15 +23,20 @@ use ori_providers::reconcile::{InstanceSpec, MachineType};
 #[ignore = "requires a real Proxmox host (ORI_PVE_* env)"]
 async fn proxmox_passes_declared_capabilities() {
     common::load_env();
-    let config = ori_providers::proxmox::ProxmoxConfig::from_env().expect("proxmox config from env");
+    let config =
+        ori_providers::proxmox::ProxmoxConfig::from_env().expect("proxmox config from env");
     let provider = ProxmoxProvider::new(config.clone())
         .await
         .expect("preflight against the real host");
 
     // Allocate the conformance instances' vmids up front from the reserved test
     // range, exactly like the lifecycle test does.
-    let min: u32 = common::env("ORI_PVE_TEST_VMID_MIN").parse().expect("vmid min");
-    let max: u32 = common::env("ORI_PVE_TEST_VMID_MAX").parse().expect("vmid max");
+    let min: u32 = common::env("ORI_PVE_TEST_VMID_MIN")
+        .parse()
+        .expect("vmid min");
+    let max: u32 = common::env("ORI_PVE_TEST_VMID_MAX")
+        .parse()
+        .expect("vmid max");
     let in_use = provider
         .client()
         .lxc_vmids()

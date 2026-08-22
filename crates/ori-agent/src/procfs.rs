@@ -68,9 +68,8 @@ pub fn parse_tcp_line(line: &str) -> Option<ListenEntry> {
 pub fn listening_on_port(port: u16) -> Result<Vec<ListenEntry>, AgentError> {
     let mut out = Vec::new();
     for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        let raw = std::fs::read_to_string(path).map_err(|e| {
-            AgentError::Other(format!("cannot read {path}: {e}"))
-        })?;
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| AgentError::Other(format!("cannot read {path}: {e}")))?;
         for line in raw.lines().skip(1) {
             if let Some(entry) = parse_tcp_line(line) {
                 if entry.port == port {

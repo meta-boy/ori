@@ -180,7 +180,10 @@ fn open_append_0600(path: &Path) -> std::io::Result<std::fs::File> {
 
 #[cfg(not(unix))]
 fn open_append_0600(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().create(true).append(true).open(path)
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
 }
 
 #[cfg(test)]

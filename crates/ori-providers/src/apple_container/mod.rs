@@ -126,10 +126,16 @@ mod tests {
         let p = AppleContainerProvider::new();
         assert_eq!(p.name(), "apple-container");
         let caps = p.capabilities();
-        assert!(caps.desktop, "macOS instances have a GUI (Screen Sharing/VNC)");
+        assert!(
+            caps.desktop,
+            "macOS instances have a GUI (Screen Sharing/VNC)"
+        );
         assert!(!caps.linked_clone && !caps.fs_snapshot && !caps.live_suspend);
 
-        let h = InstanceHandle { provider: "apple-container".to_string(), id: "x".to_string() };
+        let h = InstanceHandle {
+            provider: "apple-container".to_string(),
+            id: "x".to_string(),
+        };
         let spec = InstanceSpec {
             id: "x".to_string(),
             vmid: 1,
@@ -140,14 +146,26 @@ mod tests {
             environment: None,
             environment_version: None,
         };
-        let err = p.create(&spec).await.expect_err("stub must not fake success");
+        let err = p
+            .create(&spec)
+            .await
+            .expect_err("stub must not fake success");
         assert!(
-            matches!(err, Error::ProviderNotImplemented { provider: "apple-container", operation: "create" }),
+            matches!(
+                err,
+                Error::ProviderNotImplemented {
+                    provider: "apple-container",
+                    operation: "create"
+                }
+            ),
             "got: {err}"
         );
         let err = p.start(&h).await.expect_err("stub must not fake success");
         assert!(matches!(err, Error::ProviderNotImplemented { .. }));
-        let err = p.snapshot(&h, "golden").await.expect_err("stub must not fake success");
+        let err = p
+            .snapshot(&h, "golden")
+            .await
+            .expect_err("stub must not fake success");
         assert!(matches!(err, Error::ProviderNotImplemented { .. }));
     }
 }

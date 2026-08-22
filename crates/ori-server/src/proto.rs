@@ -67,31 +67,31 @@ impl TypedId {
 
     /// `ori_` + 8 `[a-z0-9]` — sandbox id.
     pub fn sandbox() -> TypedId {
-        TypedId::random(8, &BASE36, "ori_")
+        TypedId::random(8, BASE36, "ori_")
     }
     /// `oriop_` + 32 hex — async deletion operation id.
     pub fn deletion_op() -> TypedId {
-        TypedId::random(32, &HEX, "oriop_")
+        TypedId::random(32, HEX, "oriop_")
     }
     /// `orik_` + 32 hex — api key id.
     pub fn api_key() -> TypedId {
-        TypedId::random(32, &HEX, "orik_")
+        TypedId::random(32, HEX, "orik_")
     }
     /// `orisnap_` + 32 hex — snapshot id.
     pub fn snapshot() -> TypedId {
-        TypedId::random(32, &HEX, "orisnap_")
+        TypedId::random(32, HEX, "orisnap_")
     }
     /// `orid_` + 32 hex — device-code login id.
     pub fn device_code() -> TypedId {
-        TypedId::random(32, &HEX, "orid_")
+        TypedId::random(32, HEX, "orid_")
     }
     /// `orip_` + 32 hex — process id.
     pub fn process() -> TypedId {
-        TypedId::random(32, &HEX, "orip_")
+        TypedId::random(32, HEX, "orip_")
     }
     /// `ori_sk_` + 40 hex — the api key secret shown exactly once.
     pub fn api_key_secret() -> TypedId {
-        TypedId::random(40, &HEX, "ori_sk_")
+        TypedId::random(40, HEX, "ori_sk_")
     }
 }
 

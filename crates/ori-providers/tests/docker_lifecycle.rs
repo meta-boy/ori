@@ -75,13 +75,9 @@ async fn real_lifecycle() {
 
         // linked clone — container from the committed image.
         let t = Instant::now();
-        let child = Provider::clone_from(
-            provider.as_ref(),
-            &snap,
-            &spec(&child_name, image),
-        )
-        .await
-        .map_err(|e| format!("clone_from: {e}"))?;
+        let child = Provider::clone_from(provider.as_ref(), &snap, &spec(&child_name, image))
+            .await
+            .map_err(|e| format!("clone_from: {e}"))?;
         created.push(child.clone());
         assert_budget("clone_from", t.elapsed(), Duration::from_secs(5))?;
 

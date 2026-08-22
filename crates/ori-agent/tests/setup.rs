@@ -7,8 +7,8 @@ mod common;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ori_agent::{Agent, Config, Incoming, Outgoing};
 use common::{cfg, request_until};
+use ori_agent::{Agent, Config, Incoming, Outgoing};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("ori-agent-it-{tag}-{}", std::process::id()));
@@ -58,7 +58,9 @@ async fn setup_script_reports_done() {
         .find(|f| matches!(f, Outgoing::SetupStatus { status, .. } if status == "done"));
     assert!(done.is_some(), "expected a done setupStatus: {frames:?}");
     assert!(
-        frames.iter().any(|f| matches!(f, Outgoing::SetupStatus { status, .. } if status == "running")),
+        frames
+            .iter()
+            .any(|f| matches!(f, Outgoing::SetupStatus { status, .. } if status == "running")),
         "running must precede done"
     );
     std::fs::remove_dir_all(&dir).ok();

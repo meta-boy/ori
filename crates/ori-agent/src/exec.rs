@@ -224,7 +224,15 @@ mod tests {
         let (sout, _rout) = mpsc::channel(4);
         let (serr, _rerr) = mpsc::channel(4);
         let argv = vec!["sh".into(), "-c".into(), "exit 42".into()];
-        let outcome = run(&argv, Path::new("/"), &HashMap::new(), Duration::from_secs(30), sout, serr).await;
+        let outcome = run(
+            &argv,
+            Path::new("/"),
+            &HashMap::new(),
+            Duration::from_secs(30),
+            sout,
+            serr,
+        )
+        .await;
         assert!(!outcome.timed_out);
         assert_eq!(outcome.exit_code, 42);
     }
@@ -252,8 +260,15 @@ mod tests {
             "-c".into(),
             "printf out; printf err >&2".into(),
         ];
-        let outcome =
-            run(&argv, Path::new("/"), &HashMap::new(), Duration::from_secs(30), sout, serr).await;
+        let outcome = run(
+            &argv,
+            Path::new("/"),
+            &HashMap::new(),
+            Duration::from_secs(30),
+            sout,
+            serr,
+        )
+        .await;
         assert_eq!(outcome.exit_code, 0);
         assert_eq!(String::from_utf8(outcome.stdout).unwrap(), "out");
         assert_eq!(String::from_utf8(outcome.stderr).unwrap(), "err");
@@ -267,11 +282,21 @@ mod tests {
         let (serr, _rerr) = mpsc::channel(4);
         let argv = vec!["sh".into(), "-c".into(), "sleep 30".into()];
         let start = tokio::time::Instant::now();
-        let outcome =
-            run(&argv, Path::new("/"), &HashMap::new(), Duration::from_millis(300), sout, serr).await;
+        let outcome = run(
+            &argv,
+            Path::new("/"),
+            &HashMap::new(),
+            Duration::from_millis(300),
+            sout,
+            serr,
+        )
+        .await;
         assert!(outcome.timed_out);
         assert_eq!(outcome.exit_code, EXIT_CODE_TIMED_OUT);
-        assert!(start.elapsed() < Duration::from_secs(5), "must not wait out the full sleep");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must not wait out the full sleep"
+        );
     }
 
     #[tokio::test]
@@ -280,8 +305,20 @@ mod tests {
         let (serr, _rerr) = mpsc::channel(4);
         let mut env = HashMap::new();
         env.insert("ORI_TEST_VAR".into(), "hello".into());
-        let argv = vec!["sh".into(), "-c".into(), "printf %s \"$ORI_TEST_VAR\"".into()];
-        let outcome = run(&argv, Path::new("/"), &env, Duration::from_secs(30), sout, serr).await;
+        let argv = vec![
+            "sh".into(),
+            "-c".into(),
+            "printf %s \"$ORI_TEST_VAR\"".into(),
+        ];
+        let outcome = run(
+            &argv,
+            Path::new("/"),
+            &env,
+            Duration::from_secs(30),
+            sout,
+            serr,
+        )
+        .await;
         assert_eq!(String::from_utf8(outcome.stdout).unwrap(), "hello");
     }
 
@@ -308,8 +345,15 @@ mod tests {
         let (sout, _rout) = mpsc::channel(4);
         let (serr, _rerr) = mpsc::channel(4);
         let argv = vec!["definitely-not-a-real-binary-xyz".into()];
-        let outcome =
-            run(&argv, Path::new("/"), &HashMap::new(), Duration::from_secs(30), sout, serr).await;
+        let outcome = run(
+            &argv,
+            Path::new("/"),
+            &HashMap::new(),
+            Duration::from_secs(30),
+            sout,
+            serr,
+        )
+        .await;
         assert!(outcome.spawn_error.is_some());
         assert_eq!(outcome.pid, 0);
     }

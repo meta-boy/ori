@@ -569,10 +569,8 @@ async fn run_resume(
     }
     let new_stop_after = if req.no_auto_stop == Some(true) {
         Some(None)
-    } else if let Some(ttl) = req.ttl_seconds {
-        Some(Some(after_seconds(ttl)))
     } else {
-        None
+        req.ttl_seconds.map(|ttl| Some(after_seconds(ttl)))
     };
     if let Some(v) = new_stop_after {
         let _ = repo::set_stop_after(&state.db, &id, v.as_deref()).await;

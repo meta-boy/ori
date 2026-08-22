@@ -17,10 +17,9 @@ use tokio::sync::mpsc;
 /// lines. The body ends when the sender is dropped.
 pub fn ndjson_body(rx: mpsc::UnboundedReceiver<Bytes>) -> Body {
     Body::from_stream(unfold(rx, move |mut rx| async move {
-        match rx.recv().await {
-            Some(bytes) => Some((Ok::<Bytes, Infallible>(bytes), rx)),
-            None => None,
-        }
+        rx.recv()
+            .await
+            .map(|bytes| (Ok::<Bytes, Infallible>(bytes), rx))
     }))
 }
 

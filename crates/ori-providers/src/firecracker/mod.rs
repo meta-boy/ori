@@ -134,7 +134,10 @@ mod tests {
         assert!(caps.live_suspend, "firecracker snapshot/restore is real");
         assert!(!caps.linked_clone && !caps.fs_snapshot && !caps.desktop);
 
-        let h = InstanceHandle { provider: "firecracker".to_string(), id: "x".to_string() };
+        let h = InstanceHandle {
+            provider: "firecracker".to_string(),
+            id: "x".to_string(),
+        };
         let spec = InstanceSpec {
             id: "x".to_string(),
             vmid: 1,
@@ -145,14 +148,34 @@ mod tests {
             environment: None,
             environment_version: None,
         };
-        let err = p.create(&spec).await.expect_err("stub must not fake success");
+        let err = p
+            .create(&spec)
+            .await
+            .expect_err("stub must not fake success");
         assert!(
-            matches!(err, Error::ProviderNotImplemented { provider: "firecracker", operation: "create" }),
+            matches!(
+                err,
+                Error::ProviderNotImplemented {
+                    provider: "firecracker",
+                    operation: "create"
+                }
+            ),
             "got: {err}"
         );
         let err = p.start(&h).await.expect_err("stub must not fake success");
         assert!(matches!(err, Error::ProviderNotImplemented { .. }));
-        let err = p.exec(&h, ExecRequest { command: vec!["true".into()], timeout: None, env: vec![], workdir: None }).await.expect_err("stub must not fake success");
+        let err = p
+            .exec(
+                &h,
+                ExecRequest {
+                    command: vec!["true".into()],
+                    timeout: None,
+                    env: vec![],
+                    workdir: None,
+                },
+            )
+            .await
+            .expect_err("stub must not fake success");
         assert!(matches!(err, Error::ProviderNotImplemented { .. }));
     }
 }

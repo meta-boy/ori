@@ -587,12 +587,7 @@ pub struct ServeArgs {
     pub provider: ServeProvider,
     /// Warm pool depth per (provider × machine type × environment). 0
     /// disables the pool so `ori new` always cold-creates. Env: ORI_POOL_DEPTH
-    #[arg(
-        long,
-        env = "ORI_POOL_DEPTH",
-        default_value_t = 0,
-        value_name = "N"
-    )]
+    #[arg(long, env = "ORI_POOL_DEPTH", default_value_t = 0, value_name = "N")]
     pub pool_depth: usize,
 }
 

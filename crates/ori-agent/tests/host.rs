@@ -6,8 +6,8 @@ mod common;
 
 use std::path::PathBuf;
 
-use ori_agent::{Agent, Incoming, Outgoing};
 use common::{cfg, request};
+use ori_agent::{Agent, Incoming, Outgoing};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("ori-agent-it-{tag}-{}", std::process::id()));
@@ -16,11 +16,18 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 async fn host_result(agent: &Agent, port: u16) -> Outgoing {
-    request(agent, Incoming::Host { id: "h1".into(), port, public: None })
-        .await
-        .into_iter()
-        .find(|f| matches!(f, Outgoing::HostResult { .. }))
-        .expect("expected a hostResult frame")
+    request(
+        agent,
+        Incoming::Host {
+            id: "h1".into(),
+            port,
+            public: None,
+        },
+    )
+    .await
+    .into_iter()
+    .find(|f| matches!(f, Outgoing::HostResult { .. }))
+    .expect("expected a hostResult frame")
 }
 
 #[tokio::test]
@@ -32,7 +39,9 @@ async fn reports_listening_when_a_service_is_up() {
     let port = listener.local_addr().unwrap().port();
 
     match host_result(&agent, port).await {
-        Outgoing::HostResult { listening, note, .. } => {
+        Outgoing::HostResult {
+            listening, note, ..
+        } => {
             assert!(listening, "port {port} has a live listener: {note:?}");
         }
         other => panic!("expected hostResult, got {other:?}"),
@@ -52,7 +61,9 @@ async fn reports_nothing_listening_on_a_closed_port() {
     };
 
     match host_result(&agent, port).await {
-        Outgoing::HostResult { listening, note, .. } => {
+        Outgoing::HostResult {
+            listening, note, ..
+        } => {
             assert!(!listening, "port {port} should be closed: {note:?}");
             let note = note.expect("not-listening must explain itself");
             assert!(note.contains("nothing is listening"), "note: {note}");

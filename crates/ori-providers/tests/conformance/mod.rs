@@ -18,8 +18,8 @@
 //! ship). They remain declarations the server may trust or refuse; everything
 //! else is proven.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use ori_providers::reconcile::{
@@ -149,7 +149,12 @@ impl Conformance {
             if st != InstanceStatus::Running {
                 return Err(format!("expected Running after start, got {st:?}"));
             }
-            let out = self.exec(&h, vec!["sh".into(), "-c".into(), "echo conformance-ok".into()]).await?;
+            let out = self
+                .exec(
+                    &h,
+                    vec!["sh".into(), "-c".into(), "echo conformance-ok".into()],
+                )
+                .await?;
             if !out.contains("conformance-ok") {
                 return Err(format!("exec stdout missing marker: {out:?}"));
             }
@@ -268,15 +273,16 @@ impl Conformance {
             .await
             .map_err(|e| format!("create: {e}"))?;
         let result: Result<(), String> = async {
-            let out = self.exec(
-                &h,
-                vec![
-                    "sh".into(),
-                    "-c".into(),
-                    format!("echo {marker} > /tmp/ori-conf-marker"),
-                ],
-            )
-            .await?;
+            let out = self
+                .exec(
+                    &h,
+                    vec![
+                        "sh".into(),
+                        "-c".into(),
+                        format!("echo {marker} > /tmp/ori-conf-marker"),
+                    ],
+                )
+                .await?;
             if !out.contains(marker) {
                 return Err(format!("marker write failed: {out:?}"));
             }
@@ -289,7 +295,10 @@ impl Conformance {
                 .await
                 .map_err(|e| format!("resume (start): {e}"))?;
             let out = self
-                .exec(&h, vec!["sh".into(), "-c".into(), "cat /tmp/ori-conf-marker".into()])
+                .exec(
+                    &h,
+                    vec!["sh".into(), "-c".into(), "cat /tmp/ori-conf-marker".into()],
+                )
                 .await?;
             if !out.contains(marker) {
                 return Err(format!(

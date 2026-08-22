@@ -32,9 +32,7 @@ pub async fn request(agent: &Agent, msg: Incoming) -> Vec<Outgoing> {
     let (tx, mut rx) = mpsc::channel(64);
     agent.handle(msg, tx).await.expect("handler must not error");
     let mut out = Vec::new();
-    while let Ok(Some(frame)) =
-        tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
-    {
+    while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
         out.push(frame);
     }
     out
@@ -62,7 +60,9 @@ pub async fn request_until(
 
 /// Extract the terminal `execResult` from a batch of frames.
 pub fn exec_result(frames: &[Outgoing]) -> Option<&Outgoing> {
-    frames.iter().find(|f| matches!(f, Outgoing::ExecResult { .. }))
+    frames
+        .iter()
+        .find(|f| matches!(f, Outgoing::ExecResult { .. }))
 }
 
 /// Extract a `setupStatus` frame from a batch.

@@ -6,8 +6,8 @@ mod common;
 
 use std::path::PathBuf;
 
-use ori_agent::{Agent, Incoming, Outgoing};
 use common::{cfg, request};
+use ori_agent::{Agent, Incoming, Outgoing};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("ori-agent-it-{tag}-{}", std::process::id()));
@@ -51,7 +51,11 @@ async fn secret_file_lands_0600_roundtrip() {
             Some(Outgoing::ApplyResult { ok: true, .. })
         ));
 
-        let mode = std::fs::metadata(&secret_path).unwrap().permissions().mode() & 0o777;
+        let mode = std::fs::metadata(&secret_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600, "secret must be exactly 0600");
         assert_eq!(std::fs::read(&secret_path).unwrap(), b"s3cr3t");
         std::fs::remove_dir_all(&dir).ok();
@@ -82,6 +86,9 @@ async fn failed_claim_reports_not_ok_and_leaves_no_partial_secret() {
             .find(|f| matches!(f, Outgoing::ApplyResult { .. })),
         Some(Outgoing::ApplyResult { ok: false, .. })
     ));
-    assert!(!dir.join("creds").exists(), "no secret file may be left behind");
+    assert!(
+        !dir.join("creds").exists(),
+        "no secret file may be left behind"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }

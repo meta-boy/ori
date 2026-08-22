@@ -7,8 +7,8 @@ mod common;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ori_agent::{Agent, Incoming, Outgoing};
 use common::{cfg, request};
+use ori_agent::{Agent, Incoming, Outgoing};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("ori-agent-it-{tag}-{}", std::process::id()));
@@ -29,8 +29,16 @@ async fn spawn_detached(agent: &Agent, cmd: Vec<String>) -> i64 {
         },
     )
     .await;
-    match frames.iter().find(|f| matches!(f, Outgoing::ExecResult { .. })) {
-        Some(Outgoing::ExecResult { pid, detached, completed, .. }) => {
+    match frames
+        .iter()
+        .find(|f| matches!(f, Outgoing::ExecResult { .. }))
+    {
+        Some(Outgoing::ExecResult {
+            pid,
+            detached,
+            completed,
+            ..
+        }) => {
             assert!(*detached, "execResult must say detached");
             assert!(!*completed, "detached exec is not completed yet");
             *pid
@@ -40,11 +48,17 @@ async fn spawn_detached(agent: &Agent, cmd: Vec<String>) -> i64 {
 }
 
 async fn status(agent: &Agent, pid: i64) -> Outgoing {
-    request(agent, Incoming::ExecStatus { id: "s1".into(), pid })
-        .await
-        .into_iter()
-        .find(|f| matches!(f, Outgoing::ExecStatusResult { .. }))
-        .expect("expected execStatusResult")
+    request(
+        agent,
+        Incoming::ExecStatus {
+            id: "s1".into(),
+            pid,
+        },
+    )
+    .await
+    .into_iter()
+    .find(|f| matches!(f, Outgoing::ExecStatusResult { .. }))
+    .expect("expected execStatusResult")
 }
 
 #[tokio::test]
@@ -66,7 +80,9 @@ async fn detach_then_status_then_lost_lifecycle() {
 
     // Immediately after spawn it is running.
     match status(&agent, pid).await {
-        Outgoing::ExecStatusResult { state, exit_code, .. } => {
+        Outgoing::ExecStatusResult {
+            state, exit_code, ..
+        } => {
             assert_eq!(state, "running");
             assert!(exit_code.is_none());
         }
@@ -91,7 +107,12 @@ async fn detach_then_status_then_lost_lifecycle() {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         match status(&agent, pid).await {
-            Outgoing::ExecStatusResult { state, exit_code, log_tail, .. } => {
+            Outgoing::ExecStatusResult {
+                state,
+                exit_code,
+                log_tail,
+                ..
+            } => {
                 if state == "exited" {
                     assert_eq!(exit_code, Some(7));
                     let tail = log_tail.unwrap();
@@ -107,7 +128,12 @@ async fn detach_then_status_then_lost_lifecycle() {
 
     // A pid the agent has never spawned reports `lost`, not an error.
     match status(&agent, 999_999_999).await {
-        Outgoing::ExecStatusResult { state, exit_code, log_tail, .. } => {
+        Outgoing::ExecStatusResult {
+            state,
+            exit_code,
+            log_tail,
+            ..
+        } => {
             assert_eq!(state, "lost");
             assert!(exit_code.is_none());
             assert!(log_tail.is_none());

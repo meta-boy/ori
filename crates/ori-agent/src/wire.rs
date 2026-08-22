@@ -280,7 +280,9 @@ mod tests {
     fn exec_defaults_to_no_detach_and_30s_timeout() {
         let raw = r#"{"type":"exec","id":"r1","cmd":["true"]}"#;
         match serde_json::from_str::<Incoming>(raw).unwrap() {
-            Incoming::Exec { timeout, detach, .. } => {
+            Incoming::Exec {
+                timeout, detach, ..
+            } => {
                 assert_eq!(timeout, None);
                 assert_eq!(detach, None);
             }

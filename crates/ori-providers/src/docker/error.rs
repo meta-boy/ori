@@ -34,9 +34,13 @@ impl DockerError {
     pub fn from_bollard(e: bollard::errors::Error) -> Self {
         use bollard::errors::Error as B;
         match e {
-            B::DockerResponseServerError { status_code, message } => {
-                DockerError::Http { status: status_code, message }
-            }
+            B::DockerResponseServerError {
+                status_code,
+                message,
+            } => DockerError::Http {
+                status: status_code,
+                message,
+            },
             B::DockerStreamError { error } => DockerError::Stream(error),
             B::SocketNotFoundError(path) => DockerError::SocketNotFound(path),
             B::RequestTimeoutError => DockerError::Transport("request timed out".to_string()),

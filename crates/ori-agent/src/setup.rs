@@ -83,7 +83,12 @@ impl SetupRunner {
     /// over `tx`. No-op when there is no script or it already started. The
     /// effective spec is resolved by the caller (config claim vs `apply`
     /// message) so this is safe to call from both paths.
-    pub async fn start(&self, spec: Option<&SetupSpec>, logs_dir: &Path, tx: mpsc::Sender<Outgoing>) {
+    pub async fn start(
+        &self,
+        spec: Option<&SetupSpec>,
+        logs_dir: &Path,
+        tx: mpsc::Sender<Outgoing>,
+    ) {
         let Some(spec) = spec else {
             return;
         };
@@ -122,7 +127,12 @@ impl SetupRunner {
             let new_state = if outcome.exit_code == 0 {
                 SetupState::Done
             } else {
-                let err = outcome.log_tail.trim().chars().take(2048).collect::<String>();
+                let err = outcome
+                    .log_tail
+                    .trim()
+                    .chars()
+                    .take(2048)
+                    .collect::<String>();
                 let err = if err.is_empty() {
                     format!("setup script exited with {}", outcome.exit_code)
                 } else {
@@ -132,10 +142,11 @@ impl SetupRunner {
             };
 
             *state_clone.lock().unwrap() = new_state.clone();
-            let (status, error) = (new_state.status().to_string(), new_state.error().map(String::from));
-            let _ = tx_clone
-                .send(Outgoing::SetupStatus { status, error })
-                .await;
+            let (status, error) = (
+                new_state.status().to_string(),
+                new_state.error().map(String::from),
+            );
+            let _ = tx_clone.send(Outgoing::SetupStatus { status, error }).await;
         });
     }
 
@@ -224,7 +235,10 @@ async fn run_script(path: &Path, log_path: &Path) -> ScriptOutcome {
         Err(_) => 1,
     };
     let log_tail = crate::processes::tail_file(log_path, 2048).unwrap_or_default();
-    ScriptOutcome { exit_code, log_tail }
+    ScriptOutcome {
+        exit_code,
+        log_tail,
+    }
 }
 
 #[cfg(unix)]
@@ -241,13 +255,16 @@ fn open_append_0600(path: &Path) -> std::io::Result<std::fs::File> {
 
 #[cfg(not(unix))]
 fn open_append_0600(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().create(true).append(true).open(path)
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
 }
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
     use super::*;
+    use base64::Engine as _;
 
     fn spec(script: &str) -> SetupSpec {
         SetupSpec {

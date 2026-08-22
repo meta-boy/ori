@@ -117,73 +117,106 @@ mod tests {
             &self,
             _spec: &crate::reconcile::InstanceSpec,
         ) -> Result<crate::reconcile::InstanceHandle, Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "create" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "create",
+            })
         }
         async fn clone_from(
             &self,
             _src: &crate::reconcile::SnapshotRef,
             _spec: &crate::reconcile::InstanceSpec,
         ) -> Result<crate::reconcile::InstanceHandle, Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "clone_from" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "clone_from",
+            })
         }
         async fn start(&self, _h: &crate::reconcile::InstanceHandle) -> Result<(), Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "start" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "start",
+            })
         }
         async fn stop(
             &self,
             _h: &crate::reconcile::InstanceHandle,
             _mode: crate::reconcile::StopMode,
         ) -> Result<(), Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "stop" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "stop",
+            })
         }
         async fn destroy(&self, _h: &crate::reconcile::InstanceHandle) -> Result<(), Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "destroy" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "destroy",
+            })
         }
         async fn status(
             &self,
             _h: &crate::reconcile::InstanceHandle,
         ) -> Result<crate::reconcile::InstanceStatus, Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "status" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "status",
+            })
         }
         async fn snapshot(
             &self,
             _h: &crate::reconcile::InstanceHandle,
             _name: &str,
         ) -> Result<crate::reconcile::SnapshotRef, Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "snapshot" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "snapshot",
+            })
         }
         async fn rollback(
             &self,
             _h: &crate::reconcile::InstanceHandle,
             _s: &crate::reconcile::SnapshotRef,
         ) -> Result<(), Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "rollback" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "rollback",
+            })
         }
-        async fn snapshot_delete(
-            &self,
-            _s: &crate::reconcile::SnapshotRef,
-        ) -> Result<(), Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "snapshot_delete" })
+        async fn snapshot_delete(&self, _s: &crate::reconcile::SnapshotRef) -> Result<(), Error> {
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "snapshot_delete",
+            })
         }
         async fn exec(
             &self,
             _h: &crate::reconcile::InstanceHandle,
             _req: crate::reconcile::ExecRequest,
         ) -> Result<crate::reconcile::ExecResult, Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "exec" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "exec",
+            })
         }
         async fn resize(
             &self,
             _h: &crate::reconcile::InstanceHandle,
             _t: crate::reconcile::MachineType,
         ) -> Result<(), Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "resize" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "resize",
+            })
         }
         async fn addresses(
             &self,
             _h: &crate::reconcile::InstanceHandle,
         ) -> Result<crate::reconcile::Addresses, Error> {
-            Err(Error::ProviderNotImplemented { provider: self.0, operation: "addresses" })
+            Err(Error::ProviderNotImplemented {
+                provider: self.0,
+                operation: "addresses",
+            })
         }
     }
 
@@ -218,7 +251,9 @@ mod tests {
         registry
             .register(Arc::new(Fake("docker", caps())))
             .expect("register");
-        let err = registry.register(Arc::new(Fake("docker", caps()))).expect_err("duplicate");
+        let err = registry
+            .register(Arc::new(Fake("docker", caps())))
+            .expect_err("duplicate");
         assert!(err.to_string().contains("docker"), "got: {err}");
     }
 }

@@ -89,8 +89,9 @@ impl Config {
         let raw = std::fs::read_to_string(&resolved).map_err(|e| {
             AgentError::Config(format!("cannot read config {}: {e}", resolved.display()))
         })?;
-        let cfg: Config = serde_json::from_str(&raw)
-            .map_err(|e| AgentError::Config(format!("invalid config {}: {e}", resolved.display())))?;
+        let cfg: Config = serde_json::from_str(&raw).map_err(|e| {
+            AgentError::Config(format!("invalid config {}: {e}", resolved.display()))
+        })?;
         cfg.validate()?;
 
         // The config carries secret material; make sure it is not world-readable.
@@ -227,15 +228,21 @@ pub fn home_dir() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
     use super::*;
+    use base64::Engine as _;
 
     #[test]
     fn resolves_cwd_relative_to_work_dir() {
         let wd = Path::new("/home/u/work");
         assert_eq!(resolve_cwd(wd, None), PathBuf::from("/home/u/work"));
-        assert_eq!(resolve_cwd(wd, Some("src")), PathBuf::from("/home/u/work/src"));
-        assert_eq!(resolve_cwd(wd, Some("src/sub")), PathBuf::from("/home/u/work/src/sub"));
+        assert_eq!(
+            resolve_cwd(wd, Some("src")),
+            PathBuf::from("/home/u/work/src")
+        );
+        assert_eq!(
+            resolve_cwd(wd, Some("src/sub")),
+            PathBuf::from("/home/u/work/src/sub")
+        );
         assert_eq!(resolve_cwd(wd, Some("/abs")), PathBuf::from("/abs"));
     }
 

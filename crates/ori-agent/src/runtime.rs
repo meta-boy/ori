@@ -92,7 +92,11 @@ impl Agent {
     /// Errors are surfaced as `Outgoing::Error` (with the request id) by the
     /// caller; this returns `Ok` for handled requests even when the *remote
     /// command* failed — a non-zero exit code is a result, not a failure.
-    pub async fn handle(&self, msg: Incoming, tx: mpsc::Sender<Outgoing>) -> Result<(), AgentError> {
+    pub async fn handle(
+        &self,
+        msg: Incoming,
+        tx: mpsc::Sender<Outgoing>,
+    ) -> Result<(), AgentError> {
         match msg {
             Incoming::Ping { id } => {
                 if let Some(id) = id {
@@ -137,10 +141,7 @@ impl Agent {
                 match result {
                     Ok(()) => {
                         // Claim applied → the sandbox is ready; kick off setup.
-                        let setup_spec = claim
-                            .setup
-                            .as_ref()
-                            .or(self.cfg.claim.setup.as_ref());
+                        let setup_spec = claim.setup.as_ref().or(self.cfg.claim.setup.as_ref());
                         if let Some(spec) = setup_spec {
                             if let Err(e) = Config::validate_setup(spec) {
                                 tx.send(Outgoing::ApplyResult {
@@ -152,9 +153,15 @@ impl Agent {
                                 return Ok(());
                             }
                         }
-                        self.setup.start(setup_spec, &self.logs_dir, tx.clone()).await;
-                        tx.send(Outgoing::ApplyResult { id, ok: true, error: None })
-                            .await?;
+                        self.setup
+                            .start(setup_spec, &self.logs_dir, tx.clone())
+                            .await;
+                        tx.send(Outgoing::ApplyResult {
+                            id,
+                            ok: true,
+                            error: None,
+                        })
+                        .await?;
                     }
                     Err(e) => {
                         tx.send(Outgoing::ApplyResult {
@@ -215,10 +222,7 @@ impl Agent {
                 }
 
                 if detach.unwrap_or(false) {
-                    let pid = match self
-                        .spawn_detached(&cmd, &command_env, &workdir)
-                        .await
-                    {
+                    let pid = match self.spawn_detached(&cmd, &command_env, &workdir).await {
                         Ok(pid) => pid,
                         Err(e) => {
                             tx.send(Outgoing::Error {
@@ -253,8 +257,22 @@ impl Agent {
             Incoming::ExecStatus { id, pid } => {
                 let status = self.status(pid as i32);
                 let (state, exit_code, log_tail) = match status {
-                    ProcStatus::Running => ("running", None, self.registry.lock().unwrap().log_tail(pid as i32, processes::LOG_TAIL_MAX_BYTES)),
-                    ProcStatus::Exited(code) => ("exited", Some(code), self.registry.lock().unwrap().log_tail(pid as i32, processes::LOG_TAIL_MAX_BYTES)),
+                    ProcStatus::Running => (
+                        "running",
+                        None,
+                        self.registry
+                            .lock()
+                            .unwrap()
+                            .log_tail(pid as i32, processes::LOG_TAIL_MAX_BYTES),
+                    ),
+                    ProcStatus::Exited(code) => (
+                        "exited",
+                        Some(code),
+                        self.registry
+                            .lock()
+                            .unwrap()
+                            .log_tail(pid as i32, processes::LOG_TAIL_MAX_BYTES),
+                    ),
                     ProcStatus::Lost => ("lost", None, None),
                 };
                 tx.send(Outgoing::ExecStatusResult {
@@ -267,7 +285,11 @@ impl Agent {
                 Ok(())
             }
 
-            Incoming::Host { id, port, public: _ } => {
+            Incoming::Host {
+                id,
+                port,
+                public: _,
+            } => {
                 let probe = host::probe(port).await;
                 tx.send(Outgoing::HostResult {
                     id,
@@ -285,7 +307,13 @@ impl Agent {
     /// environment, overlaid with the claim-injected env.
     fn command_env(&self) -> HashMap<String, String> {
         let mut env: HashMap<String, String> = std::env::vars().collect();
-        env.extend(self.claim_env.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())));
+        env.extend(
+            self.claim_env
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
         env
     }
 
@@ -442,7 +470,8 @@ mod tests {
         cfg.claim.env.insert("CLAIMED".into(), "yes".into());
         let agent = Agent::new(cfg);
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(agent.apply_claim(&agent.cfg.claim.clone())).unwrap();
+        rt.block_on(agent.apply_claim(&agent.cfg.claim.clone()))
+            .unwrap();
         let env = agent.command_env();
         assert_eq!(env.get("CLAIMED").map(String::as_str), Some("yes"));
         // Inherited env (PATH etc.) is preserved.

@@ -6,8 +6,8 @@ mod common;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ori_agent::{Agent, Incoming, Outgoing};
 use common::{cfg, exec_result, request};
+use ori_agent::{Agent, Incoming, Outgoing};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("ori-agent-it-{tag}-{}", std::process::id()));
@@ -32,7 +32,12 @@ async fn propagates_the_remote_exit_code() {
     )
     .await;
     match exec_result(&frames).unwrap() {
-        Outgoing::ExecResult { exit_code, completed, timed_out, .. } => {
+        Outgoing::ExecResult {
+            exit_code,
+            completed,
+            timed_out,
+            ..
+        } => {
             assert!(*completed);
             assert!(!*timed_out);
             assert_eq!(*exit_code, 42);
@@ -60,7 +65,12 @@ async fn enforces_timeout_and_reports_124() {
     )
     .await;
     match exec_result(&frames).unwrap() {
-        Outgoing::ExecResult { exit_code, timed_out, completed, .. } => {
+        Outgoing::ExecResult {
+            exit_code,
+            timed_out,
+            completed,
+            ..
+        } => {
             assert!(*timed_out);
             assert_eq!(*exit_code, 124);
             assert!(*completed, "killed-by-timeout is still a completed run");
@@ -93,7 +103,9 @@ async fn resolves_cwd_against_the_work_dir() {
     )
     .await;
     match exec_result(&frames).unwrap() {
-        Outgoing::ExecResult { stdout, exit_code, .. } => {
+        Outgoing::ExecResult {
+            stdout, exit_code, ..
+        } => {
             assert_eq!(*exit_code, 0);
             let expected = std::fs::canonicalize(work.join("sub"))
                 .unwrap_or_else(|_| work.join("sub"))
@@ -156,7 +168,9 @@ async fn missing_binary_is_a_spawn_error() {
         "expected a spawn error frame, not an execResult: {frames:?}"
     );
     assert!(
-        !frames.iter().any(|f| matches!(f, Outgoing::ExecResult { .. })),
+        !frames
+            .iter()
+            .any(|f| matches!(f, Outgoing::ExecResult { .. })),
         "a failed spawn must not look like a completed command"
     );
     std::fs::remove_dir_all(&dir).ok();

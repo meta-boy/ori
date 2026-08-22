@@ -20,7 +20,10 @@ use crate::wire::decode_b64;
 /// Apply a claim payload. `env` is mutated in place (claim env overlaid on the
 /// base environment). Fails the whole claim if any secret file or checkout
 /// fails.
-pub async fn apply_claim(claim: &Claim, env: &mut HashMap<String, String>) -> Result<(), AgentError> {
+pub async fn apply_claim(
+    claim: &Claim,
+    env: &mut HashMap<String, String>,
+) -> Result<(), AgentError> {
     env.extend(claim.env.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     for sf in &claim.secret_files {
@@ -52,13 +55,15 @@ pub async fn write_secret_file(path: &Path, contents_b64: &str) -> Result<(), Ag
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts
-        .open(path)
-        .map_err(|e| AgentError::Other(format!("cannot write secret file {}: {e}", path.display())))?;
+    let mut f = opts.open(path).map_err(|e| {
+        AgentError::Other(format!("cannot write secret file {}: {e}", path.display()))
+    })?;
     use std::io::Write;
     f.write_all(&contents)
         .and_then(|_| f.sync_all())
-        .map_err(|e| AgentError::Other(format!("cannot write secret file {}: {e}", path.display())))?;
+        .map_err(|e| {
+            AgentError::Other(format!("cannot write secret file {}: {e}", path.display()))
+        })?;
     f.sync_all().ok();
 
     set_private(path)?;
@@ -81,17 +86,15 @@ fn create_dir_all_private(path: &Path) -> Result<(), AgentError> {
     use std::os::unix::fs::DirBuilderExt;
     let mut b = std::fs::DirBuilder::new();
     b.recursive(true).mode(0o700);
-    b.create(path).map_err(|e| {
-        AgentError::Other(format!("cannot create dir {}: {e}", path.display()))
-    })?;
+    b.create(path)
+        .map_err(|e| AgentError::Other(format!("cannot create dir {}: {e}", path.display())))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
 fn create_dir_all_private(path: &Path) -> Result<(), AgentError> {
-    std::fs::create_dir_all(path).map_err(|e| {
-        AgentError::Other(format!("cannot create dir {}: {e}", path.display()))
-    })?;
+    std::fs::create_dir_all(path)
+        .map_err(|e| AgentError::Other(format!("cannot create dir {}: {e}", path.display())))?;
     Ok(())
 }
 
@@ -134,11 +137,7 @@ fn verify_private(_path: &Path) -> Result<(), AgentError> {
 
 /// Check out a repo into `dest`. Shallow by default; honors an optional ref.
 /// If `dest` already holds a checkout, it is fast-forwarded instead of cloned.
-pub async fn checkout_repo(
-    url: &str,
-    branch: Option<&str>,
-    dest: &Path,
-) -> Result<(), AgentError> {
+pub async fn checkout_repo(url: &str, branch: Option<&str>, dest: &Path) -> Result<(), AgentError> {
     let parent = dest.parent().map(Path::to_path_buf).unwrap_or_default();
     if !parent.as_os_str().is_empty() {
         std::fs::create_dir_all(&parent)?;
@@ -149,7 +148,12 @@ pub async fn checkout_repo(
 
     if already_repo {
         let mut fetch = vec!["-C".into(), dest.display().to_string()];
-        fetch.extend(["fetch".into(), "--depth".into(), "1".into(), "origin".into()]);
+        fetch.extend([
+            "fetch".into(),
+            "--depth".into(),
+            "1".into(),
+            "origin".into(),
+        ]);
         run_git(&fetch, timeout).await?;
 
         let mut args = vec!["-C".into(), dest.display().to_string(), "checkout".into()];
@@ -179,7 +183,12 @@ async fn run_git(args: &[String], timeout: Duration) -> Result<(), AgentError> {
         .kill_on_drop(true);
     let out = tokio::time::timeout(timeout, cmd.output())
         .await
-        .map_err(|_| AgentError::Other(format!("git {} timed out", args.first().cloned().unwrap_or_default())))?
+        .map_err(|_| {
+            AgentError::Other(format!(
+                "git {} timed out",
+                args.first().cloned().unwrap_or_default()
+            ))
+        })?
         .map_err(|e| AgentError::Other(format!("cannot run git: {e}")))?;
 
     if !out.status.success() {
@@ -195,8 +204,8 @@ async fn run_git(args: &[String], timeout: Duration) -> Result<(), AgentError> {
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
     use super::*;
+    use base64::Engine as _;
 
     #[tokio::test]
     async fn secret_file_lands_0600() {
@@ -219,7 +228,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let dir = std::env::temp_dir().join(format!("ori-agent-secret2-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("ori-agent-secret2-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("creds");
             std::fs::write(&path, b"old").unwrap();
@@ -262,7 +272,11 @@ mod tests {
             apply_claim(&claim, &mut env).await.unwrap();
             assert_eq!(env["A"], "1");
             assert_eq!(env["BASE"], "x");
-            let mode = std::fs::metadata(&secret_path).unwrap().permissions().mode() & 0o777;
+            let mode = std::fs::metadata(&secret_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
             assert_eq!(mode, 0o600);
             std::fs::remove_dir_all(&dir).ok();
         }
