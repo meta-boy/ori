@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 /// Build a streamed response body from a channel of pre-serialised NDJSON
 /// lines. The body ends when the sender is dropped.
-pub fn ndjson_body(mut rx: mpsc::UnboundedReceiver<Bytes>) -> Body {
+pub fn ndjson_body(rx: mpsc::UnboundedReceiver<Bytes>) -> Body {
     Body::from_stream(unfold(rx, move |mut rx| async move {
         match rx.recv().await {
             Some(bytes) => Some((Ok::<Bytes, Infallible>(bytes), rx)),

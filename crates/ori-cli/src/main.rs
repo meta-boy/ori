@@ -10,7 +10,16 @@ use ori_cli::render::json_enabled;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // Usage errors exit 1 (per SPEC-CLI.md); clap's default is 2, which we
+    // reserve for API errors.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            let code = if e.use_stderr() { 1 } else { 0 };
+            let _ = e.print();
+            return ExitCode::from(code);
+        }
+    };
 
     // --json auto-enables when stdout is not a TTY.
     let json = json_enabled(cli.json);

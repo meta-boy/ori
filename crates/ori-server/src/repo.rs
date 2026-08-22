@@ -3,7 +3,7 @@
 use sqlx::FromRow;
 use sqlx::SqlitePool;
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::ApiResult;
 use crate::proto::{BoxState, MachineType, Sandbox};
 use crate::util::now_ts;
 

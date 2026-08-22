@@ -11,7 +11,7 @@ use crate::proto::{InstanceHandle, Operation, TypedId};
 use crate::state::AppState;
 use crate::util::now_ts;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OperationRow {
     pub id: String,
     pub sandbox_id: String,
@@ -178,13 +178,13 @@ async fn deletion_blocked(state: &AppState, sandbox_id: &str) -> Option<String> 
 /// Re-claim `pending` operations left over from a previous run (crash before
 /// completion) and process them.
 pub async fn resume_pending_deletions(state: &AppState) {
-    let pending: Vec<String> = sqlx::query_as(
+    let pending: Vec<(String,)> = sqlx::query_as(
         "SELECT id FROM deletion_operations WHERE status = 'pending'",
     )
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
-    for id in pending {
+    for (id,) in pending {
         let state2 = state.clone();
         tokio::spawn(async move { run_deletion(state2, id).await });
     }

@@ -5,9 +5,11 @@
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use axum::extract::FromRequestParts;
+use axum::extract::State;
 use axum::http::header::AUTHORIZATION;
-use axum::http::request::Parts;
+use axum::http::Request;
+use axum::middleware::Next;
+use axum::response::Response;
 use sqlx::SqlitePool;
 
 use crate::error::{ApiError, ApiResult};
@@ -25,7 +27,7 @@ pub struct ApiKeyAuth {
 pub fn hash_secret(secret: &str) -> ApiResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
-        .hash_password(secret.as_bytes(), salt.as_str())
+        .hash_password(secret.as_bytes(), &salt)
         .map(|h| h.to_string())
         .map_err(|e| ApiError::internal(format!("argon2 failure: {e}")))
 }
@@ -41,7 +43,7 @@ pub fn verify_secret(secret: &str, phc: &str) -> bool {
 /// Look up the presented bearer secret among active keys. The at-rest hash is
 /// salted, so we cannot index on it; we verify against each active key. Fine
 /// at single-account scale; revisit with a keyed fingerprint if keys grow.
-async fn authenticate(db: &SqlitePool, token: &str) -> ApiResult<ApiKeyAuth> {
+pub async fn authenticate(db: &SqlitePool, token: &str) -> ApiResult<ApiKeyAuth> {
     let rows: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT id, account_id, key_hash FROM api_keys WHERE revoked_at IS NULL",
     )
@@ -55,23 +57,24 @@ async fn authenticate(db: &SqlitePool, token: &str) -> ApiResult<ApiKeyAuth> {
     Err(ApiError::unauthorized())
 }
 
-impl FromRequestParts<AppState> for ApiKeyAuth {
-    type Rejection = ApiError;
-
-    fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
-        async move {
-            let token = parts
-                .headers
-                .get(AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-                .ok_or_else(ApiError::unauthorized)?;
-            authenticate(&state.db, token).await
-        }
-    }
+/// Middleware that authenticates the bearer token and stores the principal in
+/// request extensions. Handlers pull it out with `Extension<ApiKeyAuth>`.
+/// Kept out of `FromRequestParts` because axum 0.7 + rustc 1.87 trips E0195
+/// on async-fn trait methods with a concrete state type.
+pub async fn require_auth(
+    State(state): State<AppState>,
+    mut req: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let token = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(ApiError::unauthorized)?;
+    let auth = authenticate(&state.db, token).await?;
+    req.extensions_mut().insert(auth);
+    Ok(next.run(req).await)
 }
 
 /// Whether any API key exists yet. Used for first-user bootstrap: until the
@@ -81,6 +84,16 @@ pub async fn has_any_key(db: &SqlitePool) -> ApiResult<bool> {
         .fetch_one(db)
         .await?;
     Ok(row.0 > 0)
+}
+
+/// Read the bearer token from a request without authenticating (used by the
+/// bootstrap-able key-creation route, which is outside the auth middleware).
+pub fn bearer_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
 }
 
 #[cfg(test)]

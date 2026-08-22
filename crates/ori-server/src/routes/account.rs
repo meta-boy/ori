@@ -1,7 +1,7 @@
 //! Account identity, limits, teams, and API keys.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 
 use crate::auth::{self, ApiKeyAuth};
 use crate::error::{ApiError, ApiResult};
@@ -19,9 +19,9 @@ const MAX_TOTAL_SANDBOXES: i64 = 20;
 const MAX_STORAGE_GB: i64 = 50;
 const RATE_LIMIT_PER_MINUTE: i64 = 120;
 
-pub async fn me(State(_state): State<AppState>, auth: ApiKeyAuth) -> ApiResult<Json<Account>> {
+pub async fn me(State(_state): State<AppState>, auth: Extension<ApiKeyAuth>) -> ApiResult<Json<Account>> {
     Ok(Json(Account {
-        identifier: auth.account_id,
+        identifier: auth.0.account_id,
         login_state: "active".into(),
         plan: PLAN.into(),
         status: "active".into(),
@@ -30,7 +30,7 @@ pub async fn me(State(_state): State<AppState>, auth: ApiKeyAuth) -> ApiResult<J
 
 pub async fn limits(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
 ) -> ApiResult<Json<Limits>> {
     let (running, total) = repo::counts(&state.db, &auth.account_id).await?;
     Ok(Json(Limits {
@@ -44,7 +44,10 @@ pub async fn limits(
     }))
 }
 
-pub async fn teams(State(_state): State<AppState>, _auth: ApiKeyAuth) -> ApiResult<Json<TeamList>> {
+pub async fn teams(
+    State(_state): State<AppState>,
+    _auth: Extension<ApiKeyAuth>,
+) -> ApiResult<Json<TeamList>> {
     // v1: a single personal billing scope.
     Ok(Json(TeamList {
         teams: vec![Team {
@@ -60,11 +63,16 @@ pub async fn teams(State(_state): State<AppState>, _auth: ApiKeyAuth) -> ApiResu
 
 pub async fn create_api_key(
     State(state): State<AppState>,
-    auth: Option<ApiKeyAuth>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> ApiResult<Json<ApiKeyCreated>> {
-    // First-user bootstrap: until one key exists, creation is unauthenticated
-    // so the operator can mint the first key. After that, keys require auth.
+    // This route lives outside the auth middleware: it is the bootstrap path
+    // (no keys yet -> unauthenticated mint of the first key). If a bearer
+    // token IS present, authenticate against it.
+    let auth = match auth::bearer_token(&headers) {
+        Some(token) => Some(auth::authenticate(&state.db, &token).await?),
+        None => None,
+    };
     if auth.is_none() && auth::has_any_key(&state.db).await? {
         return Err(ApiError::unauthorized());
     }
@@ -102,7 +110,7 @@ pub async fn create_api_key(
 
 pub async fn list_api_keys(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
 ) -> ApiResult<Json<ApiKeyList>> {
     #[derive(sqlx::FromRow)]
     struct KeyRow {
@@ -137,7 +145,7 @@ pub async fn list_api_keys(
 
 pub async fn revoke_api_key(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let res = sqlx::query(

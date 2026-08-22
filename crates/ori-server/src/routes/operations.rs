@@ -1,7 +1,7 @@
 //! Async operation status.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 
 use crate::auth::ApiKeyAuth;
 use crate::deletion;
@@ -11,7 +11,7 @@ use crate::state::AppState;
 
 pub async fn get_operation(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<OperationDetail>> {
     let op = deletion::get_operation(&state.db, &id)

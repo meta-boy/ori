@@ -89,12 +89,15 @@ fn spec(vmid: u32, name: &str) -> InstanceSpec {
     }
 }
 
-fn assert_budget(label: &str, elapsed: Duration, budget: Duration) {
-    assert!(
-        elapsed <= budget,
-        "{label} took {elapsed:?}, budget was {budget:?} (docs/BENCHMARKS.md)"
-    );
-    println!("{label}: {elapsed:?}");
+fn assert_budget(label: &str, elapsed: Duration, budget: Duration) -> Result<(), String> {
+    if elapsed <= budget {
+        println!("{label}: {elapsed:?}");
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} took {elapsed:?}, budget was {budget:?} (docs/BENCHMARKS.md)"
+        ))
+    }
 }
 
 #[tokio::test]
@@ -120,7 +123,7 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
             .await
             .map_err(|e| format!("create: {e}"))?;
         created.push(src.clone());
-        assert_budget("create", t.elapsed(), Duration::from_secs(9));
+        assert_budget("create", t.elapsed(), Duration::from_secs(9))?;
 
         // snapshot — measured 1.15 s.
         let t = Instant::now();
@@ -128,8 +131,7 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
             .snapshot(&src, "golden")
             .await
             .map_err(|e| format!("snapshot: {e}"))?;
-        created.push(src.clone());
-        assert_budget("snapshot", t.elapsed(), Duration::from_secs(5));
+        assert_budget("snapshot", t.elapsed(), Duration::from_secs(5))?;
 
         // linked clone — measured 1.65–1.83 s (O(1) in disk size).
         let t = Instant::now();
@@ -138,7 +140,7 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
             .await
             .map_err(|e| format!("clone_from: {e}"))?;
         created.push(child.clone());
-        assert_budget("clone_from", t.elapsed(), Duration::from_secs(6));
+        assert_budget("clone_from", t.elapsed(), Duration::from_secs(6))?;
 
         // start — measured 3.0 s to running, 4.4 s to exec-ready.
         let t = Instant::now();
@@ -146,7 +148,7 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
             .start(&child)
             .await
             .map_err(|e| format!("start: {e}"))?;
-        assert_budget("start", t.elapsed(), Duration::from_secs(8));
+        assert_budget("start", t.elapsed(), Duration::from_secs(8))?;
 
         // exec — pct exec round trip measured 0.90 s (bootstrap fallback).
         let t = Instant::now();
@@ -162,7 +164,7 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
             )
             .await
             .map_err(|e| format!("exec: {e}"))?;
-        assert_budget("exec", t.elapsed(), Duration::from_secs(5));
+        assert_budget("exec", t.elapsed(), Duration::from_secs(5))?;
         assert_eq!(
             String::from_utf8_lossy(&exec.stdout).trim(),
             "ori-exec-ok",
@@ -176,7 +178,7 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
             .stop(&child, StopMode::Snapshot)
             .await
             .map_err(|e| format!("stop: {e}"))?;
-        assert_budget("stop", t.elapsed(), Duration::from_secs(6));
+        assert_budget("stop", t.elapsed(), Duration::from_secs(6))?;
 
         // start again (resume) — measured 4.4 s to exec-ready.
         let t = Instant::now();
@@ -184,7 +186,7 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
             .start(&child)
             .await
             .map_err(|e| format!("resume: {e}"))?;
-        assert_budget("resume", t.elapsed(), Duration::from_secs(8));
+        assert_budget("resume", t.elapsed(), Duration::from_secs(8))?;
 
         // addresses must come back after the resumed start.
         let addrs = provider

@@ -14,7 +14,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::error::ApiResult;
 use crate::mock::MockProvider;
-use crate::proto::{BoxState, InstanceHandle, InstanceStatus, StopMode};
+use crate::proto::{BoxState, InstanceHandle, InstanceStatus, Provider, StopMode};
 use crate::repo;
 use crate::state::AppState;
 use crate::util::now_ts;
@@ -75,11 +75,11 @@ pub async fn reconcile_once(state: &AppState) -> ApiResult<()> {
     //    orphans; real providers get drift-only reconciliation until the
     //    real provider lands with its own inventory.
     if let Some(mock) = state.provider.as_any().downcast_ref::<MockProvider>() {
-        let db_handles: Vec<String> =
+        let db_handles: Vec<(String,)> =
             sqlx::query_as("SELECT provider_handle FROM sandboxes WHERE provider = 'mock' AND deleted_at IS NULL")
                 .fetch_all(&state.db)
                 .await?;
-        let known: HashSet<String> = db_handles.into_iter().collect();
+        let known: HashSet<String> = db_handles.into_iter().map(|(h,)| h).collect();
         let mock_ids: Vec<String> =
             mock.registry.lock().unwrap().instances.keys().cloned().collect();
         for mid in mock_ids {

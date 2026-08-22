@@ -6,7 +6,7 @@
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
@@ -50,7 +50,7 @@ fn emit(tx: &mpsc::UnboundedSender<Bytes>, ev: StreamEvent) -> bool {
 
 pub async fn create_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Json(req): Json<CreateSandboxRequest>,
 ) -> ApiResult<Response> {
     let machine_type = req.machine_type.unwrap_or(MachineType::Default);
@@ -71,8 +71,9 @@ pub async fn create_sandbox(
 
     let (tx, rx) = mpsc::unbounded_channel();
     let state2 = state.clone();
+    let account_id = auth.0.account_id;
     tokio::spawn(async move {
-        run_create(state2, auth.account_id, req, machine_type, environment, tx).await;
+        run_create(state2, account_id, req, machine_type, environment, tx).await;
     });
     Ok(ndjson_response(rx, StatusCode::OK))
 }
@@ -245,14 +246,14 @@ fn default_filter() -> String {
 
 pub async fn list_sandboxes(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<Json<SandboxList>> {
     let letters =
         crate::proto::states_for_filter(&params.filter).map_err(ApiError::invalid_request)?;
     let states = repo::state_names_for_letters(&letters);
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let offset: u32 = params.cursor.parse().unwrap_or(0);
+    let offset: u32 = params.cursor.as_deref().and_then(|c| c.parse().ok()).unwrap_or(0);
     let (rows, has_more) =
         repo::list_sandboxes(&state.db, &auth.account_id, &states, limit, offset).await?;
     let sandboxes: Vec<Sandbox> = rows.iter().map(|r| r.to_sandbox()).collect();
@@ -265,7 +266,7 @@ pub async fn list_sandboxes(
 
 pub async fn get_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<SandboxDetail>> {
     let row = fetch(&state, &id, &auth.account_id).await?;
@@ -278,7 +279,7 @@ pub async fn get_sandbox(
 
 pub async fn stop_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
     body: Option<Json<StopSandboxRequest>>,
 ) -> ApiResult<Json<SandboxDetail>> {
@@ -322,7 +323,7 @@ pub async fn stop_sandbox(
 
 pub async fn resume_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
     body: Option<Json<ResumeSandboxRequest>>,
 ) -> ApiResult<Response> {
@@ -432,7 +433,7 @@ async fn run_resume(
 
 pub async fn fork_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
     body: Option<Json<ForkSandboxRequest>>,
 ) -> ApiResult<Response> {
@@ -449,6 +450,7 @@ pub async fn fork_sandbox(
     }
     let (tx, rx) = mpsc::unbounded_channel();
     let state2 = state.clone();
+    let account_id = auth.0.account_id;
     let req = body
         .map(|b| b.0)
         .unwrap_or(ForkSandboxRequest {
@@ -461,7 +463,7 @@ pub async fn fork_sandbox(
             environment: None,
             team: None,
         });
-    tokio::spawn(async move { run_fork(state2, auth.account_id, row, req, tx).await; });
+    tokio::spawn(async move { run_fork(state2, account_id, row, req, tx).await; });
     Ok(ndjson_response(rx, StatusCode::ACCEPTED))
 }
 
@@ -541,7 +543,7 @@ async fn run_fork(
         environment_version: source.environment_version,
         env_vars,
     };
-    let handle = match state.provider.clone_from(&snap, &spec).await {
+    let handle = match crate::proto::Provider::clone_from(&*state.provider, &snap, &spec).await {
         Ok(h) => h,
         Err(e) => {
             let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
@@ -594,7 +596,7 @@ async fn run_fork(
 
 pub async fn extend_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
     body: Option<Json<ExtendSandboxRequest>>,
 ) -> ApiResult<Json<SandboxDetail>> {
@@ -625,7 +627,7 @@ pub async fn extend_sandbox(
 
 pub async fn exec_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
     Json(req): Json<ExecRequestBody>,
 ) -> ApiResult<Json<ExecResponse>> {
@@ -690,7 +692,7 @@ pub async fn exec_sandbox(
 /// `GET /sandboxes/{id}/exec/{pid}` — poll a detached process (`ori exec --status`).
 pub async fn exec_status(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path((id, pid)): Path<(String, i64)>,
 ) -> ApiResult<Json<ExecResponse>> {
     let _row = fetch(&state, &id, &auth.account_id).await?;
@@ -713,7 +715,7 @@ pub async fn exec_status(
     .await?
     .ok_or_else(|| ApiError::not_found(format!("process {pid} on sandbox {id}")))?;
 
-    let (state_name, completed) = match row.status.as_str() {
+    let (_state_name, completed) = match row.status.as_str() {
         "completed" => ("exited", true),
         "failed" => ("failed", true),
         "killed" => ("failed", true),
@@ -735,7 +737,7 @@ pub async fn exec_status(
 
 pub async fn delete_sandbox(
     State(state): State<AppState>,
-    auth: ApiKeyAuth,
+    auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<crate::proto::OperationDetail>> {
     let _row = fetch(&state, &id, &auth.account_id).await?;

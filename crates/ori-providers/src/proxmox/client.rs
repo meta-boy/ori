@@ -381,9 +381,11 @@ impl PveClient {
         self.post_task(&path, &[]).await
     }
 
-    /// `DELETE /nodes/{node}/lxc/{vmid}` → UPID.
+    /// `DELETE /nodes/{node}/lxc/{vmid}` → UPID. PVE refuses to destroy a running
+    /// container unless `force=1`, which stops it first. destroy must work on
+    /// any state (idempotent), so force is always on.
     pub async fn destroy_lxc(&self, vmid: u32) -> Result<String, PveError> {
-        let path = format!("nodes/{}/lxc/{vmid}", self.node);
+        let path = format!("nodes/{}/lxc/{vmid}?force=1", self.node);
         self.delete_task(&path).await
     }
 

@@ -1,6 +1,6 @@
 //! Small shared helpers.
 
-use chrono::{SecondsFormat, TimeZone, Utc};
+use chrono::{SecondsFormat, Utc};
 
 /// Normalised RFC3339 timestamp with second precision and a `Z` suffix, so
 /// stored timestamps compare lexicographically (used by the TTL reaper's

@@ -1,8 +1,14 @@
 //! Route table. All paths are under `/api/v1` (the base the client uses).
+//!
+//! Auth: everything except device login and the version check sits behind the
+//! bearer-key middleware. Key creation is its own unauthenticated bootstrap
+//! route (it checks the bearer token itself when one is present).
 
+use axum::middleware;
 use axum::routing::{delete, get, post};
 use axum::Router;
 
+use crate::auth;
 use crate::state::AppState;
 
 mod account;
@@ -12,10 +18,7 @@ mod operations;
 mod sandboxes;
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/api/v1/me", get(account::me))
-        .route("/api/v1/limits", get(account::limits))
-        .route("/api/v1/teams", get(account::teams))
+    let protected = Router::new()
         .route(
             "/api/v1/sandboxes",
             post(sandboxes::create_sandbox).get(sandboxes::list_sandboxes),
@@ -34,14 +37,21 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sandboxes/{id}/interrupt", post(ai::interrupt_sandbox))
         .route("/api/v1/sandboxes/{id}/events", get(ai::events_sandbox))
         .route("/api/v1/operations/{id}", get(operations::get_operation))
+        .route("/api/v1/me", get(account::me))
+        .route("/api/v1/limits", get(account::limits))
+        .route("/api/v1/teams", get(account::teams))
         .route(
             "/api/v1/api-keys",
             get(account::list_api_keys).post(account::create_api_key),
         )
         .route("/api/v1/api-keys/{id}/revoke", post(account::revoke_api_key))
+        .layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+
+    Router::new()
         .route("/api/v1/cli/login/start", post(login::login_start))
         .route("/api/v1/cli/login/{id}/approve", post(login::login_approve))
         .route("/api/v1/cli/login/poll/{id}", get(login::login_poll))
         .route("/api/v1/cli/version", get(login::cli_version))
+        .merge(protected)
         .with_state(state)
 }
