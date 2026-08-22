@@ -3,7 +3,7 @@
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(
     name = "ori",
     version,
@@ -30,7 +30,7 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a sandbox
     New(NewArgs),
@@ -117,7 +117,7 @@ pub enum Command {
 // ---------------------------------------------------------------------------
 // Lifecycle
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct NewArgs {
     /// Machine type: small|default|large
     #[arg(long = "type", value_name = "TYPE")]
@@ -151,7 +151,7 @@ pub struct NewArgs {
     pub personal: bool,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ListArgs {
     /// Filter by state group: r/s/p/t/e
     #[arg(long, default_value = "r", value_name = "RSPTE")]
@@ -161,13 +161,13 @@ pub struct ListArgs {
     pub all: bool,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct InfoArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct StopArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -176,7 +176,7 @@ pub struct StopArgs {
     pub force: bool,
 }
 
-#[derive(Args, Clone)]
+#[derive(Debug, Args, Clone)]
 pub struct ResumeOptions {
     /// Machine type: small|default|large
     #[arg(long = "type", value_name = "TYPE")]
@@ -198,7 +198,7 @@ pub struct ResumeOptions {
     pub environment: Option<String>,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ResumeArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -206,7 +206,7 @@ pub struct ResumeArgs {
     pub opts: ResumeOptions,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ForkArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -214,7 +214,7 @@ pub struct ForkArgs {
     pub opts: ResumeOptions,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ExtendArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -229,7 +229,7 @@ pub struct ExtendArgs {
     pub no_auto_stop: bool,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct DeleteArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -238,7 +238,7 @@ pub struct DeleteArgs {
     pub yes: bool,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct OperationArgs {
     /// Async operation id (oriop_...)
     pub id: String,
@@ -247,7 +247,7 @@ pub struct OperationArgs {
 // ---------------------------------------------------------------------------
 // Access
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct SshArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -255,7 +255,7 @@ pub struct SshArgs {
     pub command: Vec<String>,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ExecArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -275,7 +275,7 @@ pub struct ExecArgs {
     pub status: Option<u64>,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ScpArgs {
     /// Source; <id>:<path> for remote
     pub src: String,
@@ -286,7 +286,7 @@ pub struct ScpArgs {
     pub recursive: bool,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ForwardArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -301,7 +301,7 @@ pub struct ForwardArgs {
     pub bind: String,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct HostArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -318,7 +318,7 @@ pub struct HostArgs {
     pub title: Option<String>,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct DesktopArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -333,7 +333,7 @@ pub struct DesktopArgs {
 // ---------------------------------------------------------------------------
 // Snapshots
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct SnapshotsArgs {
     /// Sandbox id; omit to list all sandboxes
     pub id: Option<String>,
@@ -345,7 +345,7 @@ pub struct SnapshotsArgs {
     pub all: bool,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum SnapshotCommand {
     /// Save the current filesystem under a name; reusing a name replaces it
     Save {
@@ -390,7 +390,7 @@ pub enum SnapshotCommand {
 // ---------------------------------------------------------------------------
 // Environments
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum EnvCommand {
     /// List named environments
     List,
@@ -425,7 +425,7 @@ pub enum EnvCommand {
 // ---------------------------------------------------------------------------
 // Account
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct LoginArgs {
     /// API key to store instead of the device-code flow
     pub key: Option<String>,
@@ -437,16 +437,16 @@ pub struct LoginArgs {
     pub email: Option<String>,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct LogoutArgs {}
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct StatusArgs {}
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct LimitsArgs {}
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum ApiKeyCommand {
     /// Create an API key (secret shown once)
     Create,
@@ -458,7 +458,7 @@ pub enum ApiKeyCommand {
     Revoke { id: Option<String> },
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum WebhookCommand {
     /// Create a lifecycle webhook (secret shown once)
     Create,
@@ -470,7 +470,7 @@ pub enum WebhookCommand {
     Remove { id: Option<String> },
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum TeamCommand {
     /// List billing scopes
     List,
@@ -478,7 +478,7 @@ pub enum TeamCommand {
     Switch { id: String },
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum DataRetentionCommand {
     /// Current delete-on-stop setting
     Status,
@@ -486,10 +486,10 @@ pub enum DataRetentionCommand {
     Enable,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct DashboardArgs {}
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct SelfUpdateArgs {
     /// Apply without prompting
     #[arg(long)]
@@ -499,7 +499,7 @@ pub struct SelfUpdateArgs {
 // ---------------------------------------------------------------------------
 // Completions
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct CompletionsArgs {
     /// Shell to generate completion for
     #[arg(value_enum)]
@@ -508,29 +508,33 @@ pub struct CompletionsArgs {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Shell {
+    #[value(name = "bash")]
     Bash,
+    #[value(name = "zsh")]
     Zsh,
+    #[value(name = "fish")]
     Fish,
+    #[value(name = "powershell")]
     PowerShell,
 }
 
 // ---------------------------------------------------------------------------
 // Agent commands (v1: endpoints only)
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 #[command(trailing_var_arg = true)]
 pub struct PromptArgs {
     /// Message to send the agent
     pub message: Vec<String>,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct InterruptArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct EventsArgs {
     /// Sandbox id, or current/self inside a sandbox
     pub id: String,
@@ -542,26 +546,26 @@ pub struct EventsArgs {
 // ---------------------------------------------------------------------------
 // Roles owned by other crates
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct ServeArgs {}
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct AgentArgs {}
 
 // ---------------------------------------------------------------------------
 // Hidden helpers
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum DebugCommand {
     /// Print whether --json mode is active (for tests)
     JsonMode,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct DebugArgs {
     #[command(subcommand)]
     pub cmd: DebugCommand,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct CompleteSandboxArgs {}

@@ -312,12 +312,12 @@ fn stops_in(stop_after: &Option<String>) -> String {
     match chrono::DateTime::parse_from_rfc3339(ts) {
         Ok(t) => {
             let diff = t.with_timezone(&chrono::Utc) - chrono::Utc::now();
-            let mins = diff.num_minutes();
-            if mins < 0 {
-                "expired".to_string()
-            } else {
-                format!("{mins}m")
+            if diff < chrono::Duration::zero() {
+                return "expired".to_string();
             }
+            // Round to the nearest minute.
+            let mins = (diff.num_seconds() + 30) / 60;
+            format!("{mins}m")
         }
         Err(_) => ts.clone(),
     }

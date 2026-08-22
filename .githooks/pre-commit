@@ -2,6 +2,8 @@
 # Blocks committing references to the commercial product this project competes
 # with. Research notes live outside the repo, in ~/.ori-research.
 # Fragments are concatenated so this file does not match its own pattern.
+# Case-SENSITIVE on purpose: Rust's `Box<dyn Error>` must not trip this, while a
+# lowercase prose reference must.
 P1='\b'"b"'ox\b'
 P2='\b'"b"'x[-_][a-z]'
 P3='\b'"b"'x_[a-z0-9]{6,}'
@@ -14,9 +16,9 @@ bad=0
 for f in $staged; do
   [ -f "$f" ] || continue
   case "$f" in .githooks/pre-commit) continue ;; esac
-  if git show ":$f" 2>/dev/null | grep -nEi "$PATTERN" >/dev/null; then
+  if git show ":$f" 2>/dev/null | grep -nE "$PATTERN" >/dev/null; then
     echo "pre-commit: forbidden reference in $f" >&2
-    git show ":$f" | grep -nEi "$PATTERN" | head -5 >&2
+    git show ":$f" | grep -nE "$PATTERN" | head -5 >&2
     bad=1
   fi
 done

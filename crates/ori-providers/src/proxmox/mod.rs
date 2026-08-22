@@ -108,23 +108,48 @@ fn default_task_timeout_secs() -> u64 {
 
 impl ProxmoxConfig {
     /// Build from `ORI_PVE_*` environment variables (used by integration tests
-    /// and the conformance suite).
+    /// and the conformance suite). Accepts either a combined
+    /// `ORI_PVE_TOKEN=user@realm!tokenid=secret` or the split
+    /// `ORI_PVE_TOKEN_ID` + `ORI_PVE_TOKEN_SECRET`.
     pub fn from_env() -> Result<Self, Error> {
         fn env(name: &str) -> Result<String, Error> {
             std::env::var(name)
                 .map_err(|_| Error::InvalidRequest(format!("missing environment variable {name}")))
         }
+        let token_id = std::env::var("ORI_PVE_TOKEN_ID").ok();
+        let token_secret = std::env::var("ORI_PVE_TOKEN_SECRET").ok();
+        let (token_id, token_secret) = match (token_id, token_secret) {
+            (Some(id), Some(secret)) => (id, secret),
+            _ => {
+                let combined = env("ORI_PVE_TOKEN")?;
+                let (id, secret) = combined.split_once('=').ok_or_else(|| {
+                    Error::InvalidRequest("ORI_PVE_TOKEN must be user@realm!tokenid=secret".to_string())
+                })?;
+                (id.to_string(), secret.to_string())
+            }
+        };
         Ok(ProxmoxConfig {
             host: env("ORI_PVE_HOST")?,
-            token_id: env("ORI_PVE_TOKEN_ID")?,
-            token_secret: env("ORI_PVE_TOKEN_SECRET")?,
+            token_id,
+            token_secret,
             node: env("ORI_PVE_NODE")?,
             storage: env("ORI_PVE_STORAGE")?,
-            template: env("ORI_PVE_TEMPLATE_ALPINE")?,
+            template: std::env::var("ORI_PVE_TEMPLATE_ALPINE")
+                .ok()
+                .or_else(|| std::env::var("ORI_PVE_TEMPLATE").ok())
+                .ok_or_else(|| {
+                    Error::InvalidRequest(
+                        "missing environment variable ORI_PVE_TEMPLATE_ALPINE or ORI_PVE_TEMPLATE"
+                            .to_string(),
+                    )
+                })?,
             bridge: env("ORI_PVE_BRIDGE")?,
             ca_pem: None,
-            ca_pem_file: None,
-            insecure_skip_verify: false,
+            ca_pem_file: std::env::var("ORI_PVE_CA_PEM").ok().map(Into::into),
+            insecure_skip_verify: matches!(
+                std::env::var("ORI_PVE_INSECURE").as_deref(),
+                Ok("1") | Ok("true") | Ok("yes")
+            ),
             ssh: std::env::var("ORI_PVE_SSH").ok(),
             ssh_identity_file: None,
             task_timeout_secs: default_task_timeout_secs(),
@@ -133,7 +158,7 @@ impl ProxmoxConfig {
 }
 
 /// The Proxmox backend.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProxmoxProvider {
     client: PveClient,
     config: ProxmoxConfig,
@@ -189,6 +214,10 @@ impl ProxmoxProvider {
 
     pub fn config(&self) -> &ProxmoxConfig {
         &self.config
+    }
+
+    pub fn client(&self) -> &PveClient {
+        &self.client
     }
 
     /// Startup preflight: node exists and is online, storage can snapshot
@@ -548,10 +577,11 @@ impl Provider for ProxmoxProvider {
             ("newid".to_string(), spec.vmid.to_string()),
             // Linked clone on LVM-thin: ~1.7 s and O(1) in disk size. A full
             // clone is 2× slower and PVE refuses it on a running container.
+            // PVE rejects an explicit `storage` for linked clones — it must be
+            // the source's storage.
             ("full".to_string(), "0".to_string()),
             ("snapname".to_string(), snap_name),
             ("hostname".to_string(), spec.name.clone()),
-            ("storage".to_string(), spec.storage.clone()),
             ("description".to_string(), format!("ori clone of {src_vmid}")),
         ];
         let upid = self

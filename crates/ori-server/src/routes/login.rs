@@ -133,7 +133,7 @@ pub async fn login_poll(
         "expired" => Ok(Json(LoginPollResponse { status: "expired".into(), token: None, account: None })),
         "approved" => {
             if row.token_issued {
-                return Ok(Json(LoginPollResponse { status: "approved".into(), token: None, account: None }));
+                return Ok(Json(LoginPollResponse { status: "active".into(), token: None, account: None }));
             }
             let token = row.token.clone().ok_or_else(|| ApiError::internal("approved login without token"))?;
             sqlx::query("UPDATE device_codes SET token_issued = 1, token = NULL WHERE id = ?")
@@ -141,7 +141,7 @@ pub async fn login_poll(
                 .execute(&state.db)
                 .await?;
             Ok(Json(LoginPollResponse {
-                status: "approved".into(),
+                status: "active".into(),
                 token: Some(token),
                 account: Some(Account {
                     identifier: "default".into(),

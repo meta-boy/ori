@@ -18,7 +18,7 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Stop(a) => lifecycle::stop(a, &ctx).await,
         Command::Resume(a) => lifecycle::resume(a, &ctx).await,
         Command::Fork(a) => lifecycle::fork(a, &ctx).await,
-        Command::Delete(a) => lifecycle::delete(a, &mut ctx).await,
+        Command::Delete(a) => lifecycle::delete(a, &ctx).await,
         Command::Exec(a) => access::exec(a, &ctx).await,
         Command::Login(a) => account::login(a, &mut ctx).await,
         Command::Logout(a) => account::logout(a, &mut ctx).await,

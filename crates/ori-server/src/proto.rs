@@ -310,7 +310,7 @@ pub struct Commands {
 /// One JSON object per line on the create / resume / fork streams.
 /// Serialises to exactly the lines quoted in `docs/SPEC-API.md`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "event", rename_all = "camelCase")]
+#[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum StreamEvent {
     Created {
         id: String,
@@ -415,24 +415,31 @@ pub struct SandboxList {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSandboxRequest {
-    #[serde(rename = "type", alias = "machineType")]
+    /// `type` per spec; `ty` is what the current CLI sends; `machineType` is
+    /// accepted for symmetry with the resume/fork request shapes.
+    #[serde(rename = "type", alias = "machineType", alias = "ty")]
     pub machine_type: Option<MachineType>,
     pub name: Option<String>,
     pub ttl_seconds: Option<i64>,
     pub no_auto_stop: Option<bool>,
     pub env: Option<HashMap<String, String>>,
     pub no_env: Option<bool>,
+    /// Setup script contents. The CLI calls this `setupScript`.
+    #[serde(rename = "setupScript", alias = "setupFile")]
+    pub setup_script: Option<String>,
     pub environment: Option<String>,
-    /// Create from an existing snapshot id (`ori new --from`).
-    pub from: Option<String>,
-    pub setup_file: Option<String>,
+    /// Create from an existing snapshot id (`ori new --from`). CLI: `fromSnapshot`.
+    #[serde(rename = "fromSnapshot", alias = "from")]
+    pub from_snapshot: Option<String>,
     pub team: Option<String>,
+    /// v1: single personal scope; accepted and ignored.
+    pub personal: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeSandboxRequest {
-    #[serde(rename = "type", alias = "machineType")]
+    #[serde(rename = "type", alias = "machineType", alias = "ty")]
     pub machine_type: Option<MachineType>,
     pub ttl_seconds: Option<i64>,
     pub no_auto_stop: Option<bool>,
@@ -444,7 +451,7 @@ pub struct ResumeSandboxRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForkSandboxRequest {
-    #[serde(rename = "type", alias = "machineType")]
+    #[serde(rename = "type", alias = "machineType", alias = "ty")]
     pub machine_type: Option<MachineType>,
     pub name: Option<String>,
     pub ttl_seconds: Option<i64>,
@@ -474,8 +481,12 @@ pub struct ExtendSandboxRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecRequestBody {
+    /// `cmd` per spec; `command` is what the CLI sends.
+    #[serde(alias = "command")]
     pub cmd: Vec<String>,
     pub cwd: Option<String>,
+    /// `timeoutSecs` per spec; `timeout` is what the CLI sends.
+    #[serde(rename = "timeout", alias = "timeoutSecs")]
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub detach: bool,
@@ -596,6 +607,9 @@ pub struct TeamList {
 pub struct LoginStartRequest {
     pub client_name: Option<String>,
     pub client_version: Option<String>,
+    /// `provider` / `email` are what the CLI sends; ignored in this build.
+    pub provider: Option<String>,
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

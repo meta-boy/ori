@@ -19,7 +19,7 @@ pub const VM_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// a UPID task id and HTTP 200 only means "queued"**. All mutations go through
 /// [`PveClient::wait_task`], which polls the task to completion and only then
 /// treats the operation as done.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PveClient {
     /// Node all operations target.
     pub node: String,
@@ -308,6 +308,34 @@ impl PveClient {
             .await
     }
 
+    /// `GET /nodes/{node}/lxc` — VMIDs currently on the node.
+    pub async fn lxc_vmids(&self) -> Result<Vec<u32>, PveError> {
+        let text = self.send(Method::GET, &format!("nodes/{}/lxc", self.node), None).await?;
+        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            PveError::UnexpectedResponse {
+                path: format!("nodes/{}/lxc", self.node),
+                body: format!("{e}: {text}"),
+            }
+        })?;
+        let data = value.get("data").ok_or_else(|| PveError::UnexpectedResponse {
+            path: format!("nodes/{}/lxc", self.node),
+            body: text.clone(),
+        })?;
+        let arr = data
+            .as_array()
+            .ok_or_else(|| PveError::UnexpectedResponse {
+                path: format!("nodes/{}/lxc", self.node),
+                body: text,
+            })?;
+        let mut vmids: Vec<u32> = arr
+            .iter()
+            .filter_map(|v| v.get("vmid").and_then(|x| x.as_u64()))
+            .filter_map(|x| u32::try_from(x).ok())
+            .collect();
+        vmids.sort_unstable();
+        Ok(vmids)
+    }
+
     /// `POST /nodes/{node}/lxc` → UPID.
     pub async fn create_lxc(&self, form: &[(String, String)]) -> Result<String, PveError> {
         let path = format!("nodes/{}/lxc", self.node);
@@ -320,15 +348,12 @@ impl PveClient {
         self.post_task(&path, form).await
     }
 
-    /// `POST /nodes/{node}/lxc/{vmid}/snapshot` → UPID.
+    /// `POST /nodes/{node}/lxc/{vmid}/snapshot` → UPID. Filesystem-only: we
+    /// never pass `vmstate` (memory-state suspend is not supported here — CRIU
+    /// measured failing — and this PVE rejects it on the LXC schema).
     pub async fn snapshot_lxc(&self, vmid: u32, name: &str) -> Result<String, PveError> {
         let path = format!("nodes/{}/lxc/{vmid}/snapshot", self.node);
-        let form = vec![
-            ("snapname".to_string(), name.to_string()),
-            // Never capture memory state: `live_suspend` is false on this
-            // provider (CRIU measured failing on the target kernel).
-            ("vmstate".to_string(), "0".to_string()),
-        ];
+        let form = vec![("snapname".to_string(), name.to_string())];
         self.post_task(&path, &form).await
     }
 

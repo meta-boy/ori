@@ -151,7 +151,7 @@ mod tests {
         let remote = PctExec::remote_command(9911, &req);
         assert_eq!(
             remote,
-            "pct exec 9911 -- cd '/tmp' && env 'A'='x y' echo 'hi there'"
+            "pct exec 9911 -- cd '/tmp' && env 'A'='x y' 'echo' 'hi there'"
         );
     }
 }

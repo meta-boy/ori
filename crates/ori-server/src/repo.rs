@@ -255,6 +255,22 @@ pub async fn set_no_env(db: &SqlitePool, id: &str, no_env: bool) -> ApiResult<()
     Ok(())
 }
 
+pub async fn set_setup_status(
+    db: &SqlitePool,
+    id: &str,
+    status: &str,
+    error: Option<&str>,
+) -> ApiResult<()> {
+    sqlx::query("UPDATE sandboxes SET setup_status = ?, setup_error = ?, updated_at = ? WHERE id = ?")
+        .bind(status)
+        .bind(error)
+        .bind(now_ts())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn soft_delete(db: &SqlitePool, id: &str) -> ApiResult<()> {
     sqlx::query("UPDATE sandboxes SET deleted_at = ?, updated_at = ? WHERE id = ?")
         .bind(now_ts())

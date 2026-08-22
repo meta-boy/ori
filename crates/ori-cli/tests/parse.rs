@@ -6,7 +6,7 @@ use clap::Parser;
 use ori_cli::cli::{Cli, Command, DebugCommand, EnvCommand, Shell, SnapshotCommand};
 
 fn parse(args: &[&str]) -> Cli {
-    Cli::try_parse_from(std::iter::once(&"ori").chain(args.iter().copied())).unwrap()
+    Cli::try_parse_from(["ori"].into_iter().chain(args.iter().copied())).unwrap()
 }
 
 #[test]

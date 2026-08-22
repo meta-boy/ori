@@ -108,17 +108,18 @@ fn env_help_covers_spec() {
 
 #[test]
 fn account_help_covers_spec() {
-    for (cmd, needles) in [
+    let checks: Vec<(&[&str], &[&str])> = vec![
         (&["login"], &["--google", "--email"]),
         (&["api-key"], &["create", "list", "rotate", "revoke"]),
         (&["webhook"], &["create", "list", "rotate", "remove"]),
         (&["team"], &["list", "switch"]),
         (&["data-retention"], &["status", "enable"]),
         (&["completions"], &["bash", "zsh", "fish", "powershell"]),
-    ] {
+    ];
+    for (cmd, needles) in checks {
         let h = help(cmd);
         for n in needles {
-            assert_present(&h, cmd.join(" "), n);
+            assert_present(&h, &cmd.join(" "), n);
         }
     }
 }

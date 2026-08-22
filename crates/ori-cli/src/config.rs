@@ -15,12 +15,18 @@ use crate::error::CliError;
 /// will pin the real value; `--api-url` and `ORI_API_URL` always win over this.
 pub const DEFAULT_API_URL: &str = "https://api.ori.dev";
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub token: Option<String>,
     pub api_url: Option<String>,
     pub channel: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { token: None, api_url: None, channel: "stable".to_string() }
+    }
 }
 
 impl Config {

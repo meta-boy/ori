@@ -56,7 +56,7 @@ pub async fn create_sandbox(
     let machine_type = req.machine_type.unwrap_or(MachineType::Default);
     let environment = req.environment.clone().unwrap_or_else(|| "base".to_string());
 
-    if req.from.is_some() {
+    if req.from_snapshot.is_some() {
         return Err(ApiError::invalid_request(
             "creating from a snapshot is not implemented in this build",
         ));
@@ -171,6 +171,10 @@ async fn run_create(
         desktop_url.as_deref(),
     )
     .await;
+    // a setup script is accepted and reported as run (the mock runs nothing)
+    if req.setup_script.is_some() {
+        let _ = repo::set_setup_status(&state.db, &id, "done", None).await;
+    }
 
     let _ = emit(&tx, StreamEvent::Ready {
         id: id.clone(),
@@ -656,12 +660,13 @@ pub async fn exec_sandbox(
     let started = now_ts();
     let status = if result.completed && result.exit_code == 0 { "completed" } else { "failed" };
     sqlx::query(
-        "INSERT INTO processes (id, account_id, sandbox_id, status, exit_code, cmd, stdout, stderr, started_at, completed_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO processes (id, account_id, sandbox_id, pid, status, exit_code, cmd, stdout, stderr, started_at, completed_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&process_id)
     .bind(&auth.account_id)
     .bind(&id)
+    .bind(result.pid)
     .bind(status)
     .bind(result.exit_code)
     .bind(serde_json::to_string(&exec_req.cmd).unwrap_or_default())
@@ -679,6 +684,48 @@ pub async fn exec_sandbox(
         stdout: result.stdout,
         stderr: result.stderr,
         duration_ms: result.duration_ms,
+    }))
+}
+
+/// `GET /sandboxes/{id}/exec/{pid}` — poll a detached process (`ori exec --status`).
+pub async fn exec_status(
+    State(state): State<AppState>,
+    auth: ApiKeyAuth,
+    Path((id, pid)): Path<(String, i64)>,
+) -> ApiResult<Json<ExecResponse>> {
+    let _row = fetch(&state, &id, &auth.account_id).await?;
+    #[derive(sqlx::FromRow)]
+    struct ProcRow {
+        pid: i64,
+        status: String,
+        exit_code: Option<i64>,
+        stdout: Option<String>,
+        stderr: Option<String>,
+    }
+    let row = sqlx::query_as::<_, ProcRow>(
+        "SELECT pid, status, exit_code, stdout, stderr FROM processes \
+         WHERE sandbox_id = ? AND pid = ? AND account_id = ?",
+    )
+    .bind(&id)
+    .bind(pid)
+    .bind(&auth.account_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found(format!("process {pid} on sandbox {id}")))?;
+
+    let (state_name, completed) = match row.status.as_str() {
+        "completed" => ("exited", true),
+        "failed" => ("failed", true),
+        "killed" => ("failed", true),
+        _ => ("running", false),
+    };
+    Ok(Json(ExecResponse {
+        pid: row.pid,
+        completed,
+        exit_code: row.exit_code.unwrap_or(0),
+        stdout: row.stdout.unwrap_or_default(),
+        stderr: row.stderr.unwrap_or_default(),
+        duration_ms: 0,
     }))
 }
 

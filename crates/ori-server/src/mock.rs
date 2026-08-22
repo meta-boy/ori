@@ -12,7 +12,7 @@ use super::proto::{
     InstanceStatus, MachineType, Provider, ProviderError, SnapshotRef, StopMode,
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MockInstance {
     pub state: InstanceStatus,
 }
@@ -157,7 +157,11 @@ impl Provider for MockProvider {
         Ok(SnapshotRef { provider: "mock".into(), name: format!("{}-{name}", h.id) })
     }
 
-    async fn rollback(&self, _s: &SnapshotRef) -> Result<(), ProviderError> {
+    async fn rollback(
+        &self,
+        _h: &InstanceHandle,
+        _s: &SnapshotRef,
+    ) -> Result<(), ProviderError> {
         Ok(())
     }
 
@@ -166,7 +170,7 @@ impl Provider for MockProvider {
     }
 
     async fn exec(&self, h: &InstanceHandle, req: &ExecRequest) -> Result<ExecResult, ProviderError> {
-        let seq: u64 = h.id.split(':').nth(1).unwrap_or("1").parse().unwrap_or(1);
+        let _seq: u64 = h.id.split(':').nth(1).unwrap_or("1").parse().unwrap_or(1);
         let pid = self.next_pid.fetch_add(1, Ordering::SeqCst);
         let cmdline = req.cmd.join(" ");
         let (exit_code, stdout, stderr) = if req.cmd.first().map(|c| c == "fail").unwrap_or(false) {

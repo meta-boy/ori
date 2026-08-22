@@ -177,6 +177,7 @@ CREATE TABLE processes (
   id                     TEXT PRIMARY KEY,
   account_id             TEXT NOT NULL DEFAULT 'default',
   sandbox_id             TEXT NOT NULL,
+  pid                    INTEGER NOT NULL,
   status                 TEXT NOT NULL,                  -- running|completed|failed|killed
   exit_code              INTEGER,
   cmd                    TEXT NOT NULL,

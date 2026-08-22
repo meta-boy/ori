@@ -3,7 +3,7 @@
 //! by design.
 //! TODO(reconcile): the wordlist + generator belong in `ori-proto`.
 
-const WORDS: [&str; 256] = [
+const WORDS: &[&str] = &[
     "amber", "birch", "coral", "delta", "ember", "frost", "grape", "honey", "iris", "jade",
     "kite", "lunar", "moss", "north", "oak", "pearl", "quartz", "river", "snow", "tide",
     "umbra", "violet", "willow", "xenon", "yarrow", "zephyr", "acorn", "bison", "cedar",

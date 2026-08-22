@@ -2,6 +2,8 @@
 //! never a bare SHA); the raw secret appears only in the create response and
 //! is never logged.
 
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;
@@ -21,10 +23,9 @@ pub struct ApiKeyAuth {
 
 /// Hash a key secret into a PHC string. The salt is a fresh CSPRNG draw.
 pub fn hash_secret(secret: &str) -> ApiResult<String> {
-    let mut salt = [0u8; 16];
-    getrandom::fill(&mut salt).map_err(|e| ApiError::internal(format!("rng failure: {e}")))?;
+    let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
-        .hash_password(secret.as_bytes(), &salt)
+        .hash_password(secret.as_bytes(), salt.as_str())
         .map(|h| h.to_string())
         .map_err(|e| ApiError::internal(format!("argon2 failure: {e}")))
 }
@@ -57,14 +58,19 @@ async fn authenticate(db: &SqlitePool, token: &str) -> ApiResult<ApiKeyAuth> {
 impl FromRequestParts<AppState> for ApiKeyAuth {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let token = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .ok_or_else(ApiError::unauthorized)?;
-        authenticate(&state.db, token).await
+    fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            let token = parts
+                .headers
+                .get(AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .ok_or_else(ApiError::unauthorized)?;
+            authenticate(&state.db, token).await
+        }
     }
 }
 

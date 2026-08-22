@@ -45,7 +45,7 @@ struct CaptureResponder {
 
 impl Respond for CaptureResponder {
     fn respond(&self, req: &Request) -> ResponseTemplate {
-        *self.body.lock().unwrap() = Some(req.body.clone());
+        *self.body.lock().unwrap() = Some(String::from_utf8_lossy(&req.body).to_string());
         self.response.clone()
     }
 }
@@ -96,7 +96,8 @@ async fn mount_preflight(server: &MockServer, storage_type: &str) {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/api2/json/nodes/sandbox/storage/local/content?content=vztmpl"))
+        .and(path("/api2/json/nodes/sandbox/storage/local/content"))
+        .and(wiremock::matchers::query_param("content", "vztmpl"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "data": [{ "volid": "local:vztmpl/alpine.tar.xz", "content": "vztmpl" }]
         })))
@@ -129,7 +130,7 @@ async fn mount_preflight(server: &MockServer, storage_type: &str) {
 }
 
 /// Mount the task-status route used by the UPID poller.
-fn mount_task(server: &MockServer, states: Vec<serde_json::Value>) -> Arc<AtomicUsize> {
+async fn mount_task(server: &MockServer, states: Vec<serde_json::Value>) -> Arc<AtomicUsize> {
     let n = Arc::new(AtomicUsize::new(0));
     Mock::given(method("GET"))
         .and(path_regex("/api2/json/nodes/sandbox/tasks/.+/status"))
@@ -411,10 +412,11 @@ async fn sends_pve_api_token_header() {
     let server = MockServer::start().await;
 
     let auth_header = Arc::new(Mutex::new(None));
+    let capture = auth_header.clone();
     Mock::given(method("GET"))
         .and(path("/api2/json/cluster/nextid"))
         .respond_with(move |req: &Request| {
-            *auth_header.lock().unwrap() = req
+            *capture.lock().unwrap() = req
                 .headers
                 .get("authorization")
                 .map(|v| String::from_utf8_lossy(v.as_bytes()).to_string());

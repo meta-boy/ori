@@ -20,18 +20,34 @@ pub fn run(args: CompletionsArgs) -> Result<(), CliError> {
         Shell::Fish => clap_complete::Shell::Fish,
         Shell::PowerShell => clap_complete::Shell::PowerShell,
     };
-    let mut cmd = Cli::command();
-    clap_complete::generate(shell, &mut cmd, "ori", &mut std::io::stdout());
+    // Buffer first: clap_complete panics on a write error, so `completions bash
+    // | head` must not crash the process.
+    let mut buf = Vec::new();
+    {
+        let mut cmd = Cli::command();
+        clap_complete::generate(shell, &mut cmd, "ori", &mut buf);
+    }
 
     if matches!(args.shell, Shell::Fish) {
         // Dynamic sandbox-id completion: offer live IDs for commands whose
         // first positional is a sandbox id.
-        println!();
-        println!(
-            "complete -c ori -n '__fish_seen_subcommand_from info stop resume fork extend delete exec ssh scp forward host desktop snapshot' -a '(command ori _complete-sandbox 2>/dev/null)'"
+        buf.extend_from_slice(b"\n");
+        buf.extend_from_slice(
+            b"complete -c ori -n '__fish_seen_subcommand_from info stop resume fork extend delete exec ssh scp forward host desktop snapshot' -a '(command ori _complete-sandbox 2>/dev/null)'\n",
         );
     }
-    Ok(())
+
+    write_stdout(&buf)
+}
+
+fn write_stdout(buf: &[u8]) -> Result<(), CliError> {
+    use std::io::Write;
+    match std::io::stdout().write_all(buf) {
+        // A downstream `head` closing the pipe is not an error.
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(CliError::from(e)),
+        Ok(()) => Ok(()),
+    }
 }
 
 pub async fn complete_sandbox(ctx: &Ctx) -> Result<(), CliError> {

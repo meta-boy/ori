@@ -17,6 +17,12 @@ pub struct ApiError {
     pub message: String,
 }
 
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}: {}", self.status.as_u16(), self.code, self.message)
+    }
+}
+
 impl ApiError {
     pub fn invalid_request(msg: impl Into<String>) -> Self {
         ApiError { status: StatusCode::BAD_REQUEST, code: "invalid_request", message: msg.into() }
