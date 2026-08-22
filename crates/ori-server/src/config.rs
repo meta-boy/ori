@@ -46,6 +46,14 @@ pub struct Config {
     /// `0` disables the pool: `ori new` always takes the cold create path.
     /// `ORI_POOL_DEPTH` env / `--pool-depth` flag.
     pub pool_depth: usize,
+
+    /// Golden snapshot the warm pool clones from, as the provider-scoped
+    /// reference (`<node>/<vmid>/<snapname>` for proxmox). `None` leaves the
+    /// pool unable to fill: refill has nothing to clone. The snapshot must have
+    /// been taken while the source was **stopped** — a running-taken snapshot is
+    /// permanently ~20x slower to clone from (docs/BENCHMARKS.md).
+    /// `ORI_POOL_GOLDEN` env / `--pool-golden` flag.
+    pub pool_golden: Option<String>,
 }
 
 impl Default for Config {
@@ -59,6 +67,7 @@ impl Default for Config {
             reconcile_interval: Duration::from_secs(30),
             default_ttl_seconds: 900,
             pool_depth: 0,
+            pool_golden: None,
         }
     }
 }
@@ -100,6 +109,11 @@ impl Config {
         if let Ok(v) = std::env::var("ORI_POOL_DEPTH") {
             if let Ok(n) = v.parse::<usize>() {
                 cfg.pool_depth = n;
+            }
+        }
+        if let Ok(v) = std::env::var("ORI_POOL_GOLDEN") {
+            if !v.is_empty() {
+                cfg.pool_golden = Some(v);
             }
         }
         cfg

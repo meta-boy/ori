@@ -75,6 +75,40 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         pool,
     };
 
+    // Register the configured golden snapshot before the pool does anything.
+    // Without this the golden_snapshots table stays empty, refill has nothing
+    // to clone, and the pool silently never fills.
+    if let Some(pool) = &state.pool {
+        match &config.pool_golden {
+            Some(golden) => {
+                let snap = proto::SnapshotRef {
+                    provider: state.provider.name().to_string(),
+                    name: golden.clone(),
+                };
+                for mt in [
+                    proto::MachineType::Small,
+                    proto::MachineType::Default,
+                    proto::MachineType::Large,
+                ] {
+                    let key = pool::PoolKey {
+                        provider: state.provider.name().to_string(),
+                        machine_type: mt,
+                        environment_version: 1,
+                    };
+                    if let Err(e) = pool.register_golden(&key, "base", &snap).await {
+                        tracing::warn!(error = %e, golden = %golden,
+                            "failed to register pool golden snapshot");
+                    }
+                }
+                tracing::info!(golden = %golden, "pool golden registered");
+            }
+            None => tracing::warn!(
+                "warm pool is enabled but no --pool-golden/ORI_POOL_GOLDEN is set; \
+                 refill has nothing to clone and the pool will stay empty"
+            ),
+        }
+    }
+
     // startup pool reconciliation: the provider is truth for existence, so a
     // slot whose container it no longer has is dropped before it is served.
     if let Some(pool) = &state.pool {

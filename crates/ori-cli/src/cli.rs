@@ -589,6 +589,12 @@ pub struct ServeArgs {
     /// disables the pool so `ori new` always cold-creates. Env: ORI_POOL_DEPTH
     #[arg(long, env = "ORI_POOL_DEPTH", default_value_t = 0, value_name = "N")]
     pub pool_depth: usize,
+
+    /// Golden snapshot the warm pool clones from, as the provider-scoped
+    /// reference (proxmox: `<node>/<vmid>/<snapname>`, e.g. `pve/9501/base`).
+    /// Without it the pool cannot fill. Env: ORI_POOL_GOLDEN
+    #[arg(long, env = "ORI_POOL_GOLDEN", value_name = "REF")]
+    pub pool_golden: Option<String>,
 }
 
 #[derive(Debug, Args)]
