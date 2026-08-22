@@ -227,6 +227,7 @@ pub fn home_dir() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use super::*;
 
     #[test]
@@ -297,10 +298,7 @@ mod tests {
     fn rejects_setup_script_over_64k() {
         let big = "a".repeat(65 * 1024);
         let setup = SetupSpec {
-            script_b64: Some(base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                big.as_bytes(),
-            )),
+            script_b64: Some(base64::engine::general_purpose::STANDARD.encode(big.as_bytes())),
             path: None,
         };
         assert!(matches!(
@@ -309,10 +307,7 @@ mod tests {
         ));
 
         let ok = SetupSpec {
-            script_b64: Some(base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                b"echo hi",
-            )),
+            script_b64: Some(base64::engine::general_purpose::STANDARD.encode(b"echo hi")),
             path: None,
         };
         assert!(Config::validate_setup(&ok).is_ok());

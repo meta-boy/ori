@@ -20,6 +20,11 @@ LXC containers, confirmed by `pct list` on the host.
 | `ori login` / `logout` / `status` | **real** | |
 | `ori serve` / `ori agent` | **real** | one binary, three roles |
 
+NDJSON streaming verified genuinely incremental (not buffered): during a real
+`new`, lines arrived at +1.14 s, +7.27 s and +9.24 s with a 6.1 s gap between
+them. This matters because a buffered response contains identical bytes but
+makes the client sit silent for the whole operation.
+
 Semantics verified, not assumed: a marker file written before `stop` was present
 after `resume`; the same marker appeared in a `fork`; writing to the fork left
 the parent unchanged; `exec` returned the container's real hostname matching its

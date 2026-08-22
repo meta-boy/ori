@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
 use super::{ClaimResult, PoolConfig, PoolKey, PoolManager};
@@ -41,7 +41,6 @@ async fn test_db() -> SqlitePool {
     let opts = SqliteConnectOptions::new()
         .filename(&path)
         .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(15));
     let pool = SqlitePoolOptions::new()
