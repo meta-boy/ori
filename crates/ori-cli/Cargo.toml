@@ -13,6 +13,8 @@ name = "ori"
 path = "src/main.rs"
 
 [dependencies]
+ori-server = { path = "../ori-server" }
+ori-agent = { path = "../ori-agent" }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 serde = { workspace = true }
@@ -23,6 +25,7 @@ tokio = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures-util = { version = "0.3", features = ["std", "io"] }
 directories = "5"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 tempfile = "3"

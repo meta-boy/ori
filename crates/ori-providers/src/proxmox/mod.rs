@@ -370,16 +370,19 @@ impl ProxmoxProvider {
         if st.status == "stopped" {
             return Ok(());
         }
-        if mode == StopMode::Snapshot {
-            let name = format!(
-                "stop-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0)
-            );
-            let upid = self.client.snapshot_lxc(vmid, &name).await?;
-            self.client.wait_task(&upid, self.task_timeout()).await?;
+        match mode {
+            StopMode::Snapshot => {
+                let name = format!(
+                    "stop-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                );
+                let upid = self.client.snapshot_lxc(vmid, &name).await?;
+                self.client.wait_task(&upid, self.task_timeout()).await?;
+            }
+            StopMode::Force => {}
         }
         let upid = self.client.stop_lxc(vmid).await?;
         self.client.wait_task(&upid, self.task_timeout()).await?;

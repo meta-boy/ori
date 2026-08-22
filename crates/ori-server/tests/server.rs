@@ -691,6 +691,7 @@ async fn reconciler_marks_drift_error_and_destroys_orphans() {
 
     // 2. orphan: a provider instance with no DB sandbox is destroyed
     let orphan = t.provider.create(&ori_server::proto::InstanceSpec {
+        id: "orphan".into(),
         name: "orphan".into(),
         machine_type: MachineType::Default,
         environment: "base".into(),
@@ -700,6 +701,46 @@ async fn reconciler_marks_drift_error_and_destroys_orphans() {
     assert!(t.provider.registry.lock().unwrap().instances.contains_key(&orphan.id));
     tasks::reconcile_once(&state).await.unwrap();
     assert!(!t.provider.registry.lock().unwrap().instances.contains_key(&orphan.id));
+}
+
+/// Bug 3 regression: a sandbox whose provider still reports it up must survive
+/// a reconcile pass. Earlier the combined "provider:id" handle was stored in
+/// `provider_handle`, so reconstruction never matched the mock registry and
+/// every fresh sandbox was demoted to `error` on the next reconcile.
+#[tokio::test]
+async fn reconcile_does_not_demote_a_healthy_ready_sandbox() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (id, _) = create_sandbox(&t.app, &token, json!({})).await;
+
+    let state = AppState {
+        db: t.db.clone(),
+        provider: t.provider.clone(),
+        config: Default::default(),
+    };
+    tasks::reconcile_once(&state).await.unwrap();
+
+    let (_, v) = sandbox_info(&t.app, &token, &id).await;
+    assert_eq!(v["sandbox"]["state"], "ready", "healthy sandbox was demoted");
+    // the instance is still there (not destroyed as an orphan)
+    assert_eq!(t.provider.registry.lock().unwrap().instances.len(), 1);
+
+    // and it can still be stopped + resumed, exercising the handle round-trip
+    let (status, _) = call_json(
+        &t.app,
+        req(Method::POST, &format!("/api/v1/sandboxes/{id}/stop"), Some(&token), Some(json!({}))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, stream) = call(
+        &t.app,
+        req(Method::POST, &format!("/api/v1/sandboxes/{id}/resume"), Some(&token), Some(json!({}))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let events = parse_stream(&stream);
+    let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert_eq!(kinds, vec!["accepted", "state", "state", "ready"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -856,8 +897,10 @@ async fn ndjson_is_flushed_per_line_not_buffered() {
         "first line arrived after {first_line_at:?} — the stream was buffered"
     );
 
-    // the whole stream has the expected events in order
-    let events = parse_stream(&received);
+    // the whole stream has the expected events in order (body only — the raw
+    // socket read includes the HTTP response headers)
+    let body = received.split("\r\n\r\n").nth(1).unwrap_or(&received);
+    let events = parse_stream(body);
     let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
     assert_eq!(kinds, vec!["created", "state", "state", "state", "ready"]);
 

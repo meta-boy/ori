@@ -10,6 +10,7 @@ pub mod error;
 pub mod mock;
 pub mod ndjson;
 pub mod proto;
+pub mod providers;
 pub mod repo;
 pub mod routes;
 pub mod slug;
@@ -34,12 +35,13 @@ pub fn build_app(db: SqlitePool, provider: Arc<dyn Provider>, config: Config) ->
     routes::router(state)
 }
 
-/// Run the control plane to completion: migrate, reconcile once at startup,
+/// Run the control plane to completion: migrate, build the configured
+/// provider (running its startup preflight), reconcile once at startup,
 /// resume interrupted deletion operations, then serve until the process is
 /// signalled.
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = db::open(&config.database_path).await?;
-    let provider: Arc<dyn Provider> = Arc::new(MockProvider::new());
+    let provider = providers::build_provider(&config, db.clone()).await?;
     let state = AppState { db, provider, config: Arc::new(config.clone()) };
 
     // startup reconciliation: the provider is truth for existence
@@ -53,7 +55,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     tasks::spawn_reconciler(state.clone());
 
     let listener = TcpListener::bind(config.listen_addr).await?;
-    tracing::info!(addr = %config.listen_addr, db = %config.database_path.display(), "ori control plane listening");
+    tracing::info!(addr = %config.listen_addr, db = %config.database_path.display(), provider = %state.provider.name(), "ori control plane listening");
     axum::serve(listener, app).await?;
     Ok(())
 }

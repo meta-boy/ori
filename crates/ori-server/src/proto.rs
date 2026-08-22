@@ -660,6 +660,9 @@ pub struct Capabilities {
 
 #[derive(Debug, Clone)]
 pub struct InstanceSpec {
+    /// Caller-allocated sandbox id, carried for providers that label their
+    /// instances with it (e.g. Proxmox container descriptions).
+    pub id: String,
     pub name: String,
     pub machine_type: MachineType,
     pub environment: String,

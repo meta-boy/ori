@@ -57,9 +57,17 @@ pub async fn reconcile_once(state: &AppState) -> ApiResult<()> {
             InstanceHandle { provider: row.provider.clone(), id: row.provider_handle.clone() };
         let gone = matches!(
             state.provider.status(&handle).await,
-            Ok(InstanceStatus::Stopped) | Ok(InstanceStatus::Missing)
+            Ok(InstanceStatus::Stopped)
+                | Ok(InstanceStatus::Missing)
+                // a provider that answers 404 has no such instance
+                | Err(crate::proto::ProviderError::NotFound(_))
         );
         if gone {
+            tracing::warn!(
+                sandbox = %row.id,
+                handle = %handle,
+                "reconciler demoted sandbox to error: provider no longer reports it up"
+            );
             let _ = repo::transition(
                 &state.db,
                 &row.id,
@@ -83,8 +91,10 @@ pub async fn reconcile_once(state: &AppState) -> ApiResult<()> {
         let mock_ids: Vec<String> =
             mock.registry.lock().unwrap().instances.keys().cloned().collect();
         for id in mock_ids {
-            let handle = InstanceHandle { provider: "mock".into(), id: id.clone() };
-            if !known.contains(&handle.to_string()) {
+            // provider_handle stores the provider-scoped id only, so the
+            // registry keys compare directly against it.
+            if !known.contains(&id) {
+                let handle = InstanceHandle { provider: "mock".into(), id: id.clone() };
                 let _ = mock.destroy(&handle).await;
                 tracing::info!(instance = %handle, "reconciler destroyed orphan");
             }

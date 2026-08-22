@@ -2,8 +2,10 @@
 
 pub mod access;
 pub mod account;
+pub mod agent;
 pub mod completions;
 pub mod lifecycle;
+pub mod serve;
 pub mod stub;
 
 use crate::cli::{Command, DebugCommand, EnvCommand, SnapshotCommand};
@@ -27,6 +29,9 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::CompleteSandbox(_) => completions::complete_sandbox(&ctx).await,
         Command::Debug(a) => debug(a.cmd, &ctx).await,
 
+        Command::Serve(a) => serve::serve(a, &ctx).await,
+        Command::Agent(a) => agent::agent(a).await,
+
         Command::Extend(_) => Err(stub::unimplemented("extend")),
         Command::Operation(_) => Err(stub::unimplemented("operation")),
         Command::Ssh(_) => Err(stub::unimplemented("ssh")),
@@ -47,8 +52,6 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Prompt(_) => Err(stub::unimplemented("prompt")),
         Command::Interrupt(_) => Err(stub::unimplemented("interrupt")),
         Command::Events(_) => Err(stub::unimplemented("events")),
-        Command::Serve(_) => Err(stub::unimplemented("serve")),
-        Command::Agent(_) => Err(stub::unimplemented("agent")),
     }
 }
 

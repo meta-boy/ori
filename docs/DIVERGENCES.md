@@ -111,3 +111,28 @@ important gap: until it closes, the product is an API with a simulator behind it
 Fix: a `--provider proxmox|docker|mock` flag plus provider config (host, token,
 node, storage, bridge, template) from env, and a startup preflight that fails
 loudly on a non-snapshot-capable storage.
+
+### 7. Two `Provider` traits — the adapter cannot call the provider
+
+Diagnosed while C11 was wiring Proxmox into the server:
+
+- `crates/ori-providers/src/reconcile.rs:194` — `pub trait Provider`
+- `crates/ori-server/src/proto.rs:748` — `pub trait Provider`
+
+`ProxmoxProvider` implements the **ori-providers** one
+(`proxmox/mod.rs:517`). The adapter in `ori-server/src/providers.rs` calls
+`capabilities`/`create`/`start`/`stop` expecting the **server's** trait, so the
+compiler reports "no method named `create` found for struct `ProxmoxProvider`".
+Compounding it, `ori-providers/src/lib.rs` re-exports only `reconcile::Error`,
+never the trait, so the trait is not even nameable from outside the crate and
+cannot be brought into scope.
+
+Minimal unblock: `pub use reconcile::Provider;` from `ori-providers`, then
+`use ori_providers::Provider as _;` at the adapter call site.
+
+Correct fix, and the one worth doing: **the trait belongs in `ori-proto`,
+defined once.** Both of these traits exist only because `ori-proto` was empty
+when each crate needed one. This is the same root cause as bug 2
+(`memoryGb`/`memoryGB`) — a shared contract that was specified in prose and then
+implemented twice. Collapsing it removes an entire class of failure instead of
+fixing two instances of it.

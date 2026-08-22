@@ -4,11 +4,8 @@ version.workspace = true
 edition.workspace = true
 description = "Control plane: axum + tokio + sqlx (SQLite, WAL). Role: `ori serve`."
 
-[[bin]]
-name = "ori-server"
-path = "src/main.rs"
-
 [dependencies]
+ori-providers = { path = "../ori-providers" }
 axum = { version = "0.7", features = ["json", "ws"] }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -22,7 +19,6 @@ argon2 = { version = "0.5", features = ["std"] }
 getrandom = "0.3"
 hex = "0.4"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]

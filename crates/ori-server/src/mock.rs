@@ -214,6 +214,7 @@ mod tests {
     async fn lifecycle() {
         let p = MockProvider::new();
         let spec = InstanceSpec {
+            id: "t".into(),
             name: "t".into(),
             machine_type: MachineType::Default,
             environment: "base".into(),
@@ -240,6 +241,7 @@ mod tests {
     async fn exec_semantics() {
         let p = MockProvider::new();
         let h = p.create(&InstanceSpec {
+            id: "t".into(),
             name: "t".into(),
             machine_type: MachineType::Default,
             environment: "base".into(),

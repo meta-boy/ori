@@ -2,7 +2,34 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
+
+/// Which sandbox backend the control plane drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderKind {
+    Mock,
+    Proxmox,
+    Docker,
+}
+
+impl Default for ProviderKind {
+    fn default() -> Self {
+        ProviderKind::Mock
+    }
+}
+
+impl FromStr for ProviderKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "mock" => Ok(ProviderKind::Mock),
+            "proxmox" => Ok(ProviderKind::Proxmox),
+            "docker" => Ok(ProviderKind::Docker),
+            other => Err(format!("unknown provider {other:?}; expected mock|proxmox|docker")),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -10,6 +37,8 @@ pub struct Config {
     pub database_path: PathBuf,
     /// Hostname used to mint `<slug>.<domain>` URLs.
     pub domain: String,
+    /// Sandbox backend. `ORI_PROVIDER` env.
+    pub provider: ProviderKind,
     /// How often the TTL reaper wakes.
     pub reap_interval: Duration,
     /// How often the provider reconciliation loop wakes.
@@ -24,6 +53,7 @@ impl Default for Config {
             listen_addr: "127.0.0.1:8080".parse().unwrap(),
             database_path: PathBuf::from("./ori.db"),
             domain: "ori.localhost".to_string(),
+            provider: ProviderKind::Mock,
             reap_interval: Duration::from_secs(10),
             reconcile_interval: Duration::from_secs(30),
             default_ttl_seconds: 900,
@@ -44,6 +74,11 @@ impl Config {
         }
         if let Ok(v) = std::env::var("ORI_DOMAIN") {
             cfg.domain = v;
+        }
+        if let Ok(v) = std::env::var("ORI_PROVIDER") {
+            if let Ok(k) = v.parse() {
+                cfg.provider = k;
+            }
         }
         if let Ok(v) = std::env::var("ORI_REAP_INTERVAL_SECS") {
             if let Ok(n) = v.parse::<u64>() {
@@ -74,5 +109,14 @@ mod tests {
         assert_eq!(cfg.listen_addr.port(), 8080);
         assert_eq!(cfg.default_ttl_seconds, 900);
         assert_eq!(cfg.domain, "ori.localhost");
+        assert_eq!(cfg.provider, ProviderKind::Mock);
+    }
+
+    #[test]
+    fn provider_kinds_parse() {
+        assert_eq!("mock".parse::<ProviderKind>().unwrap(), ProviderKind::Mock);
+        assert_eq!("proxmox".parse::<ProviderKind>().unwrap(), ProviderKind::Proxmox);
+        assert_eq!("docker".parse::<ProviderKind>().unwrap(), ProviderKind::Docker);
+        assert!("firecracker".parse::<ProviderKind>().is_err());
     }
 }

@@ -131,6 +131,7 @@ async fn run_create(
     let _ = repo::transition(&state.db, &id, &["init"], BoxState::Provisioning).await;
 
     let spec = InstanceSpec {
+        id: id.clone(),
         name: name.clone(),
         machine_type,
         environment: environment.clone(),
@@ -140,6 +141,7 @@ async fn run_create(
     let handle = match state.provider.create(&spec).await {
         Ok(h) => h,
         Err(e) => {
+            tracing::warn!(sandbox = %id, error = %e, "create: provider create failed");
             let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
             let _ = emit(&tx, StreamEvent::Error {
                 id: id.clone(),
@@ -149,7 +151,10 @@ async fn run_create(
             return;
         }
     };
-    let _ = repo::set_provider_handle(&state.db, &id, &handle.to_string()).await;
+    // provider_handle stores the provider-scoped id only; the provider name
+    // lives in its own column. Storing the combined "provider:id" display
+    // string breaks handle reconstruction and the reconciler's drift check.
+    let _ = repo::set_provider_handle(&state.db, &id, &handle.id).await;
 
     if !emit(&tx, StreamEvent::State { id: id.clone(), state: "cloning".into() }) {
         return;
@@ -368,6 +373,7 @@ async fn run_resume(
         // If the provider lost the instance the correct fallback is
         // clone_from(latest_snapshot) — never rollback. Snapshots are not
         // wired up in this build, so the honest answer is an error.
+        tracing::warn!(sandbox = %id, error = %e, "resume: provider start failed");
         let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
         let _ = emit(&tx, StreamEvent::Error {
             id: id.clone(),
@@ -537,6 +543,7 @@ async fn run_fork(
     };
 
     let spec = InstanceSpec {
+        id: child_id.clone(),
         name,
         machine_type,
         environment: environment.clone(),
@@ -546,6 +553,7 @@ async fn run_fork(
     let handle = match crate::proto::Provider::clone_from(&*state.provider, &snap, &spec).await {
         Ok(h) => h,
         Err(e) => {
+            tracing::warn!(sandbox = %child_id, error = %e, "fork: clone_from failed");
             let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
             let _ = emit(&tx, StreamEvent::Error {
                 id: child_id.clone(),
@@ -555,7 +563,7 @@ async fn run_fork(
             return;
         }
     };
-    let _ = repo::set_provider_handle(&state.db, &child_id, &handle.to_string()).await;
+    let _ = repo::set_provider_handle(&state.db, &child_id, &handle.id).await;
 
     if !emit(&tx, StreamEvent::State { id: child_id.clone(), state: "cloning".into() }) {
         return;

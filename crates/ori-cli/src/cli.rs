@@ -545,12 +545,52 @@ pub struct EventsArgs {
 
 // ---------------------------------------------------------------------------
 // Roles owned by other crates
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Args)]
-pub struct ServeArgs {}
+pub struct ServeArgs {
+    /// Address to bind. Env: ORI_LISTEN
+    #[arg(long, env = "ORI_LISTEN", default_value = "127.0.0.1:8080", value_name = "ADDR")]
+    pub bind: String,
+    /// SQLite database path. Env: ORI_DB_PATH
+    #[arg(long, env = "ORI_DB_PATH", default_value = "./ori.db", value_name = "PATH")]
+    pub db_path: String,
+    /// Domain used to mint `<slug>.<domain>` URLs. Env: ORI_DOMAIN
+    #[arg(long, env = "ORI_DOMAIN", default_value = "ori.localhost", value_name = "DOMAIN")]
+    pub domain: String,
+    /// Sandbox backend. Env: ORI_PROVIDER
+    #[arg(long, env = "ORI_PROVIDER", default_value = "mock", value_name = "PROVIDER")]
+    pub provider: ServeProvider,
+}
 
 #[derive(Debug, Args)]
-pub struct AgentArgs {}
+pub struct AgentArgs {
+    /// Agent config file (used by the golden-image provisioning scripts)
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
+}
+
+/// `--provider` choices for `ori serve`. Value is load-bearing: the server's
+/// startup preflight runs against the real backend before it listens.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ServeProvider {
+    #[value(name = "mock")]
+    Mock,
+    #[value(name = "proxmox")]
+    Proxmox,
+    #[value(name = "docker")]
+    Docker,
+}
+
+impl From<ServeProvider> for ori_server::config::ProviderKind {
+    fn from(p: ServeProvider) -> Self {
+        match p {
+            ServeProvider::Mock => ori_server::config::ProviderKind::Mock,
+            ServeProvider::Proxmox => ori_server::config::ProviderKind::Proxmox,
+            ServeProvider::Docker => ori_server::config::ProviderKind::Docker,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Hidden helpers

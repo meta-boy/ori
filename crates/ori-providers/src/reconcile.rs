@@ -46,7 +46,9 @@ pub enum MachineType {
 }
 
 impl MachineType {
-    pub const fn vcpu(self) -> u32 {
+    /// Note: receivers are `&self` so provider code compiles even if the enum
+    /// is not `Copy` (reconciliation-proof against C1's choice).
+    pub const fn vcpu(&self) -> u32 {
         match self {
             MachineType::Small => 2,
             MachineType::Default => 4,
@@ -54,7 +56,7 @@ impl MachineType {
         }
     }
 
-    pub const fn memory_gb(self) -> u32 {
+    pub const fn memory_gb(&self) -> u32 {
         match self {
             MachineType::Small => 4,
             MachineType::Default => 8,
@@ -62,7 +64,7 @@ impl MachineType {
         }
     }
 
-    pub const fn billing_multiplier(self) -> f32 {
+    pub const fn billing_multiplier(&self) -> f32 {
         match self {
             MachineType::Small => 0.5,
             MachineType::Default => 1.0,
