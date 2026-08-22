@@ -1,5 +1,27 @@
 # Status
 
+**Final state:** build clean · `cargo fmt --check` clean · 167 tests passing,
+0 failing · 1 clippy warning (a 10-argument function — a missing struct) ·
+88 files, ~19k lines · 31 commits, clean tree.
+
+Verified against a live Proxmox host with the **release** binary and the warm
+pool enabled:
+
+| operation | measured | target | |
+|---|---|---|---|
+| `new` (warm pool hit) | **0.42 – 1.50 s** | ≤1.5 s | **met** |
+| `new` (cold / pool miss) | ~8.8 s | ≤7 s | over |
+| `exec` | 1.9 – 2.7 s | ≤1 s | over — guest agent unreachable |
+| `stop` (snapshot + off) | **3.7 s** | ≤5 s | **met** |
+| `resume` | **4.3 s** | ≤4.5 s | **met** |
+| `fork` (source stopped) | **8.7 s** | ≤7 s | close |
+| `fork` (source running) | **50.8 s** | ≤7 s | **fails — see BENCHMARKS correction** |
+| `delete` (API returns) | **0.24 – 1.3 s** | ≤1 s | **met** |
+
+Data fidelity verified each run: a marker written before `stop` survived
+`resume`, was inherited by `fork`, and writes inside a fork did not reach the
+parent.
+
 Verified by running the binaries against a real Proxmox host, not by reading code.
 
 ## Working end to end (real LXC containers)
