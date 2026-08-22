@@ -25,7 +25,11 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { token: None, api_url: None, channel: "stable".to_string() }
+        Self {
+            token: None,
+            api_url: None,
+            channel: "stable".to_string(),
+        }
     }
 }
 
@@ -50,13 +54,15 @@ impl Config {
         };
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                CliError::usage(format!("cannot create config dir {}: {e}", parent.display()))
+                CliError::usage(format!(
+                    "cannot create config dir {}: {e}",
+                    parent.display()
+                ))
             })?;
         }
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json).map_err(|e| {
-            CliError::usage(format!("cannot write config {}: {e}", path.display()))
-        })?;
+        fs::write(path, json)
+            .map_err(|e| CliError::usage(format!("cannot write config {}: {e}", path.display())))?;
         set_private_mode(path)?;
         Ok(())
     }
@@ -70,9 +76,8 @@ pub fn config_path() -> Option<PathBuf> {
 #[cfg(unix)]
 fn set_private_mode(path: &Path) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|e| {
-        CliError::usage(format!("cannot chmod config {}: {e}", path.display()))
-    })
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|e| CliError::usage(format!("cannot chmod config {}: {e}", path.display())))
 }
 
 #[cfg(not(unix))]
@@ -89,7 +94,11 @@ mod tests {
     fn config_saved_with_mode_0600() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("config.json");
-        let cfg = Config { token: Some("tok".into()), api_url: None, channel: "stable".into() };
+        let cfg = Config {
+            token: Some("tok".into()),
+            api_url: None,
+            channel: "stable".into(),
+        };
         cfg.save(Some(&path)).unwrap();
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;

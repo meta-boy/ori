@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::proto::{
-    Addresses, Capabilities, ExecRequest, ExecResult, InstanceHandle, InstanceSpec,
-    InstanceStatus, MachineType, Provider, ProviderError, SnapshotRef, StopMode,
+    Addresses, Capabilities, ExecRequest, ExecResult, InstanceHandle, InstanceSpec, InstanceStatus,
+    MachineType, Provider, ProviderError, SnapshotRef, StopMode,
 };
 
 #[derive(Debug, Clone)]
@@ -55,16 +55,20 @@ impl MockProvider {
     }
 
     fn handle_for(&self, seq: u64) -> InstanceHandle {
-        InstanceHandle { provider: "mock".into(), id: seq.to_string() }
+        InstanceHandle {
+            provider: "mock".into(),
+            id: seq.to_string(),
+        }
     }
 
     fn register(&self, seq: u64) {
         let handle = self.handle_for(seq);
-        self.registry
-            .lock()
-            .unwrap()
-            .instances
-            .insert(handle.id.clone(), MockInstance { state: InstanceStatus::Running });
+        self.registry.lock().unwrap().instances.insert(
+            handle.id.clone(),
+            MockInstance {
+                state: InstanceStatus::Running,
+            },
+        );
     }
 
     fn ip_for(&self, seq: u64) -> String {
@@ -96,7 +100,9 @@ impl Provider for MockProvider {
 
     async fn create(&self, _spec: &InstanceSpec) -> Result<InstanceHandle, ProviderError> {
         if self.fail_next_create.swap(false, Ordering::SeqCst) {
-            return Err(ProviderError::Unavailable("mock provider configured to fail".into()));
+            return Err(ProviderError::Unavailable(
+                "mock provider configured to fail".into(),
+            ));
         }
         if !self.create_delay.is_zero() {
             tokio::time::sleep(self.create_delay).await;
@@ -155,14 +161,13 @@ impl Provider for MockProvider {
 
     async fn snapshot(&self, h: &InstanceHandle, name: &str) -> Result<SnapshotRef, ProviderError> {
         self.registry.lock().unwrap().snapshot_calls += 1;
-        Ok(SnapshotRef { provider: "mock".into(), name: format!("{}-{name}", h.id) })
+        Ok(SnapshotRef {
+            provider: "mock".into(),
+            name: format!("{}-{name}", h.id),
+        })
     }
 
-    async fn rollback(
-        &self,
-        _h: &InstanceHandle,
-        _s: &SnapshotRef,
-    ) -> Result<(), ProviderError> {
+    async fn rollback(&self, _h: &InstanceHandle, _s: &SnapshotRef) -> Result<(), ProviderError> {
         Ok(())
     }
 
@@ -170,7 +175,11 @@ impl Provider for MockProvider {
         Ok(())
     }
 
-    async fn exec(&self, h: &InstanceHandle, req: &ExecRequest) -> Result<ExecResult, ProviderError> {
+    async fn exec(
+        &self,
+        h: &InstanceHandle,
+        req: &ExecRequest,
+    ) -> Result<ExecResult, ProviderError> {
         let _seq: u64 = h.id.split(':').nth(1).unwrap_or("1").parse().unwrap_or(1);
         let pid = self.next_pid.fetch_add(1, Ordering::SeqCst);
         let cmdline = req.cmd.join(" ");
@@ -195,7 +204,10 @@ impl Provider for MockProvider {
 
     async fn addresses(&self, h: &InstanceHandle) -> Result<Addresses, ProviderError> {
         let seq: u64 = h.id.split(':').nth(1).unwrap_or("1").parse().unwrap_or(1);
-        Ok(Addresses { ip: Some(self.ip_for(seq)), desktop_url: None })
+        Ok(Addresses {
+            ip: Some(self.ip_for(seq)),
+            desktop_url: None,
+        })
     }
 }
 
@@ -240,18 +252,43 @@ mod tests {
     #[tokio::test]
     async fn exec_semantics() {
         let p = MockProvider::new();
-        let h = p.create(&InstanceSpec {
-            id: "t".into(),
-            name: "t".into(),
-            machine_type: MachineType::Default,
-            environment: "base".into(),
-            environment_version: 1,
-            env_vars: HashMap::new(),
-        }).await.unwrap();
-        let ok = p.exec(&h, &ExecRequest { cmd: vec!["echo".into(), "hi".into()], cwd: None, timeout_secs: None, env: HashMap::new() }).await.unwrap();
+        let h = p
+            .create(&InstanceSpec {
+                id: "t".into(),
+                name: "t".into(),
+                machine_type: MachineType::Default,
+                environment: "base".into(),
+                environment_version: 1,
+                env_vars: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        let ok = p
+            .exec(
+                &h,
+                &ExecRequest {
+                    cmd: vec!["echo".into(), "hi".into()],
+                    cwd: None,
+                    timeout_secs: None,
+                    env: HashMap::new(),
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(ok.exit_code, 0);
         assert!(ok.stdout.contains("echo hi"));
-        let bad = p.exec(&h, &ExecRequest { cmd: vec!["fail".into()], cwd: None, timeout_secs: None, env: HashMap::new() }).await.unwrap();
+        let bad = p
+            .exec(
+                &h,
+                &ExecRequest {
+                    cmd: vec!["fail".into()],
+                    cwd: None,
+                    timeout_secs: None,
+                    env: HashMap::new(),
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(bad.exit_code, 1);
         assert!(bad.stderr.contains("failed"));
     }

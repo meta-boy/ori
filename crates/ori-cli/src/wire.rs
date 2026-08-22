@@ -200,7 +200,11 @@ pub struct ConfigStatus {
 /// NDJSON lifecycle events for `new` / `resume` / `fork`. Serialises to the
 /// exact lines quoted in `docs/SPEC-API.md`.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "event",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Event {
     Created {
         id: String,
@@ -262,13 +266,17 @@ mod tests {
 
     #[test]
     fn events_deserialise_from_spec_lines() {
-        let created: Event =
-            serde_json::from_str(r#"{"event":"created","id":"ori_a1b2c3d4","ttlSeconds":900,"team":null}"#)
-                .unwrap();
-        assert!(matches!(created, Event::Created { id, ttl_seconds: Some(900), .. } if id == "ori_a1b2c3d4"));
+        let created: Event = serde_json::from_str(
+            r#"{"event":"created","id":"ori_a1b2c3d4","ttlSeconds":900,"team":null}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(created, Event::Created { id, ttl_seconds: Some(900), .. } if id == "ori_a1b2c3d4")
+        );
 
-        let state: Event = serde_json::from_str(r#"{"event":"state","id":"ori_a1b2c3d4","state":"cloning"}"#)
-            .unwrap();
+        let state: Event =
+            serde_json::from_str(r#"{"event":"state","id":"ori_a1b2c3d4","state":"cloning"}"#)
+                .unwrap();
         assert!(matches!(state, Event::State { state, .. } if state == "cloning"));
 
         let ready: Event = serde_json::from_str(
@@ -276,10 +284,15 @@ mod tests {
         )
         .unwrap();
         match ready {
-            Event::Ready { id, ip, commands, .. } => {
+            Event::Ready {
+                id, ip, commands, ..
+            } => {
                 assert_eq!(id, "ori_a1b2c3d4");
                 assert_eq!(ip.as_deref(), Some("10.0.0.12"));
-                assert_eq!(commands.as_ref().unwrap().get("ssh").unwrap(), "ori ssh ori_a1b2c3d4");
+                assert_eq!(
+                    commands.as_ref().unwrap().get("ssh").unwrap(),
+                    "ori ssh ori_a1b2c3d4"
+                );
             }
             _ => panic!("expected ready"),
         }

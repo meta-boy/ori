@@ -1,7 +1,7 @@
 //! Async operation status.
 
-use axum::Json;
 use axum::extract::{Extension, Path, State};
+use axum::Json;
 
 use crate::auth::ApiKeyAuth;
 use crate::deletion;
@@ -27,5 +27,7 @@ pub async fn get_operation(
     if mine.0 == 0 {
         return Err(ApiError::not_found(format!("operation {id}")));
     }
-    Ok(Json(OperationDetail { operation: op.to_operation() }))
+    Ok(Json(OperationDetail {
+        operation: op.to_operation(),
+    }))
 }

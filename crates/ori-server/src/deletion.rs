@@ -72,7 +72,9 @@ pub async fn start_delete(
 
     crate::repo::soft_delete(&state.db, sandbox_id).await?;
 
-    let op = get_operation(&state.db, &id).await?.ok_or_else(|| ApiError::internal("op vanished"))?;
+    let op = get_operation(&state.db, &id)
+        .await?
+        .ok_or_else(|| ApiError::internal("op vanished"))?;
     let state2 = state.clone();
     tokio::spawn(async move { run_deletion(state2, id).await });
     Ok(op)
@@ -169,7 +171,10 @@ async fn deletion_blocked(state: &AppState, sandbox_id: &str) -> Option<String> 
     .await
     .ok()?;
     if row.0 > 0 {
-        Some(format!("{} snapshot(s) still depend on this sandbox", row.0))
+        Some(format!(
+            "{} snapshot(s) still depend on this sandbox",
+            row.0
+        ))
     } else {
         None
     }
@@ -178,12 +183,11 @@ async fn deletion_blocked(state: &AppState, sandbox_id: &str) -> Option<String> 
 /// Re-claim `pending` operations left over from a previous run (crash before
 /// completion) and process them.
 pub async fn resume_pending_deletions(state: &AppState) {
-    let pending: Vec<(String,)> = sqlx::query_as(
-        "SELECT id FROM deletion_operations WHERE status = 'pending'",
-    )
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    let pending: Vec<(String,)> =
+        sqlx::query_as("SELECT id FROM deletion_operations WHERE status = 'pending'")
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
     for (id,) in pending {
         let state2 = state.clone();
         tokio::spawn(async move { run_deletion(state2, id).await });

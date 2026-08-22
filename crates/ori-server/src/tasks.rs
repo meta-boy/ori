@@ -23,18 +23,27 @@ pub async fn reap_expired(state: &AppState) -> ApiResult<()> {
     let now = now_ts();
     let rows = repo::sandboxes_in_states(&state.db, &["ready", "running", "idle"]).await?;
     for row in rows {
-        let Some(stop_after) = row.stop_after.clone() else { continue };
+        let Some(stop_after) = row.stop_after.clone() else {
+            continue;
+        };
         if stop_after > now {
             continue;
         }
         // Guarded claim: only one pass (or a concurrent stop request) wins.
-        if !repo::transition(&state.db, &row.id, &["ready", "running", "idle"], BoxState::Stopping)
-            .await?
+        if !repo::transition(
+            &state.db,
+            &row.id,
+            &["ready", "running", "idle"],
+            BoxState::Stopping,
+        )
+        .await?
         {
             continue;
         }
-        let handle =
-            InstanceHandle { provider: row.provider.clone(), id: row.provider_handle.clone() };
+        let handle = InstanceHandle {
+            provider: row.provider.clone(),
+            id: row.provider_handle.clone(),
+        };
         let _ = state.provider.snapshot(&handle, "ttl").await;
         match state.provider.stop(&handle, StopMode::Snapshot).await {
             Ok(()) => {
@@ -53,8 +62,10 @@ pub async fn reconcile_once(state: &AppState) -> ApiResult<()> {
     // 1. Drift: a sandbox we think is up that the provider says is gone.
     let rows = repo::sandboxes_in_states(&state.db, &["ready", "running", "idle"]).await?;
     for row in rows {
-        let handle =
-            InstanceHandle { provider: row.provider.clone(), id: row.provider_handle.clone() };
+        let handle = InstanceHandle {
+            provider: row.provider.clone(),
+            id: row.provider_handle.clone(),
+        };
         let gone = matches!(
             state.provider.status(&handle).await,
             Ok(InstanceStatus::Stopped)
@@ -83,18 +94,28 @@ pub async fn reconcile_once(state: &AppState) -> ApiResult<()> {
     //    orphans; real providers get drift-only reconciliation until the
     //    real provider lands with its own inventory.
     if let Some(mock) = state.provider.as_any().downcast_ref::<MockProvider>() {
-        let db_handles: Vec<(String,)> =
-            sqlx::query_as("SELECT provider_handle FROM sandboxes WHERE provider = 'mock' AND deleted_at IS NULL")
-                .fetch_all(&state.db)
-                .await?;
+        let db_handles: Vec<(String,)> = sqlx::query_as(
+            "SELECT provider_handle FROM sandboxes WHERE provider = 'mock' AND deleted_at IS NULL",
+        )
+        .fetch_all(&state.db)
+        .await?;
         let known: HashSet<String> = db_handles.into_iter().map(|(h,)| h).collect();
-        let mock_ids: Vec<String> =
-            mock.registry.lock().unwrap().instances.keys().cloned().collect();
+        let mock_ids: Vec<String> = mock
+            .registry
+            .lock()
+            .unwrap()
+            .instances
+            .keys()
+            .cloned()
+            .collect();
         for id in mock_ids {
             // provider_handle stores the provider-scoped id only, so the
             // registry keys compare directly against it.
             if !known.contains(&id) {
-                let handle = InstanceHandle { provider: "mock".into(), id: id.clone() };
+                let handle = InstanceHandle {
+                    provider: "mock".into(),
+                    id: id.clone(),
+                };
                 let _ = mock.destroy(&handle).await;
                 tracing::info!(instance = %handle, "reconciler destroyed orphan");
             }

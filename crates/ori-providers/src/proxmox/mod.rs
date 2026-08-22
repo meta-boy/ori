@@ -420,16 +420,8 @@ impl ProxmoxProvider {
                     continue;
                 }
                 match ip.kind.as_str() {
-                    "inet" => {
-                        if !v4.contains(&addr) {
-                            v4.push(addr);
-                        }
-                    }
-                    "inet6" => {
-                        if !v6.contains(&addr) {
-                            v6.push(addr);
-                        }
-                    }
+                    "inet" if !v4.contains(&addr) => v4.push(addr),
+                    "inet6" if !v6.contains(&addr) => v6.push(addr),
                     _ => {}
                 }
             }

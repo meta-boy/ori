@@ -70,7 +70,17 @@ fn list_defaults_and_all() {
 
 #[test]
 fn resume_and_fork_share_flags() {
-    let args = ["--type", "small", "--ttl", "120", "--no-auto-stop", "-e", "K=V", "--environment", "base"];
+    let args = [
+        "--type",
+        "small",
+        "--ttl",
+        "120",
+        "--no-auto-stop",
+        "-e",
+        "K=V",
+        "--environment",
+        "base",
+    ];
     match parse(&["resume", "ori_x", "--ttl", "300"]).command {
         Command::Resume(a) => {
             assert_eq!(a.id, "ori_x");
@@ -100,7 +110,19 @@ fn resume_and_fork_share_flags() {
 
 #[test]
 fn exec_flags_before_command() {
-    match parse(&["exec", "ori_x", "--cwd", "/tmp", "--timeout", "60", "echo", "hi", "-n"]).command {
+    match parse(&[
+        "exec",
+        "ori_x",
+        "--cwd",
+        "/tmp",
+        "--timeout",
+        "60",
+        "echo",
+        "hi",
+        "-n",
+    ])
+    .command
+    {
         Command::Exec(a) => {
             assert_eq!(a.id, "ori_x");
             assert_eq!(a.cwd.as_deref(), Some("/tmp"));
@@ -184,7 +206,9 @@ fn host_private_default_public_conflicts() {
         }
         other => panic!("expected host, got {other:?}"),
     }
-    assert!(Cli::try_parse_from(["ori", "host", "ori_x", "8080", "--private", "--public"]).is_err());
+    assert!(
+        Cli::try_parse_from(["ori", "host", "ori_x", "8080", "--private", "--public"]).is_err()
+    );
 }
 
 #[test]
@@ -226,7 +250,10 @@ fn snapshot_subcommands() {
 
 #[test]
 fn env_subcommands() {
-    assert!(matches!(parse(&["env", "list"]).command, Command::Env(EnvCommand::List)));
+    assert!(matches!(
+        parse(&["env", "list"]).command,
+        Command::Env(EnvCommand::List)
+    ));
     assert!(matches!(
         parse(&["env", "set-var", "prod", "KEY=VALUE"]).command,
         Command::Env(EnvCommand::SetVar { name, key_value }) if name == "prod" && key_value == "KEY=VALUE"
@@ -263,9 +290,18 @@ fn login_variants() {
 
 #[test]
 fn api_key_and_team_subcommands() {
-    assert!(matches!(parse(&["api-key", "create"]).command, Command::ApiKey(_)));
-    assert!(matches!(parse(&["team", "switch", "t1"]).command, Command::Team(_)));
-    assert!(matches!(parse(&["data-retention", "enable"]).command, Command::DataRetention(_)));
+    assert!(matches!(
+        parse(&["api-key", "create"]).command,
+        Command::ApiKey(_)
+    ));
+    assert!(matches!(
+        parse(&["team", "switch", "t1"]).command,
+        Command::Team(_)
+    ));
+    assert!(matches!(
+        parse(&["data-retention", "enable"]).command,
+        Command::DataRetention(_)
+    ));
 }
 
 #[test]

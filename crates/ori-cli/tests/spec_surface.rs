@@ -28,13 +28,44 @@ fn assert_present(h: &str, cmd: &str, needle: &str) {
 fn top_level_lists_every_subcommand() {
     let h = help(&[]);
     for s in [
-        "new", "list", "info", "stop", "resume", "fork", "extend", "delete", "operation",
-        "ssh", "exec", "scp", "forward", "host", "desktop", "snapshots", "snapshot", "env",
-        "login", "logout", "status", "limits", "api-key", "webhook", "team",
-        "data-retention", "dashboard", "self-update", "completions", "prompt", "interrupt",
-        "events", "serve", "agent",
+        "new",
+        "list",
+        "info",
+        "stop",
+        "resume",
+        "fork",
+        "extend",
+        "delete",
+        "operation",
+        "ssh",
+        "exec",
+        "scp",
+        "forward",
+        "host",
+        "desktop",
+        "snapshots",
+        "snapshot",
+        "env",
+        "login",
+        "logout",
+        "status",
+        "limits",
+        "api-key",
+        "webhook",
+        "team",
+        "data-retention",
+        "dashboard",
+        "self-update",
+        "completions",
+        "prompt",
+        "interrupt",
+        "events",
+        "serve",
+        "agent",
     ] {
-        let ok = h.lines().any(|l| l.trim_start().starts_with(s) && l.trim_start().len() > s.len());
+        let ok = h
+            .lines()
+            .any(|l| l.trim_start().starts_with(s) && l.trim_start().len() > s.len());
         assert!(ok, "top-level help is missing subcommand `{s}`\n---\n{h}");
     }
 }
@@ -50,11 +81,45 @@ fn global_flags_appear_on_subcommands() {
 #[test]
 fn lifecycle_help_covers_spec() {
     let checks: &[(&[&str], &[&str])] = &[
-        (&["new"], &["--type", "--ttl", "--no-auto-stop", "--env", "--no-env", "--setup-file", "--environment", "--from", "--team", "--personal"]),
+        (
+            &["new"],
+            &[
+                "--type",
+                "--ttl",
+                "--no-auto-stop",
+                "--env",
+                "--no-env",
+                "--setup-file",
+                "--environment",
+                "--from",
+                "--team",
+                "--personal",
+            ],
+        ),
         (&["list"], &["--filter", "--all"]),
         (&["stop"], &["--force"]),
-        (&["resume"], &["--type", "--ttl", "--no-auto-stop", "--env", "--no-env", "--environment"]),
-        (&["fork"], &["--type", "--ttl", "--no-auto-stop", "--env", "--no-env", "--environment"]),
+        (
+            &["resume"],
+            &[
+                "--type",
+                "--ttl",
+                "--no-auto-stop",
+                "--env",
+                "--no-env",
+                "--environment",
+            ],
+        ),
+        (
+            &["fork"],
+            &[
+                "--type",
+                "--ttl",
+                "--no-auto-stop",
+                "--env",
+                "--no-env",
+                "--environment",
+            ],
+        ),
         (&["extend"], &["--hours", "--ttl", "--no-auto-stop"]),
         (&["delete"], &["--yes"]),
     ];
@@ -99,8 +164,8 @@ fn snapshot_help_covers_spec() {
 fn env_help_covers_spec() {
     let h = help(&["env"]);
     for n in [
-        "list", "info", "new", "rename", "default", "rm", "set", "set-var", "rm-var",
-        "set-file", "rm-file", "add-repo", "rm-repo", "upgrade",
+        "list", "info", "new", "rename", "default", "rm", "set", "set-var", "rm-var", "set-file",
+        "rm-file", "add-repo", "rm-repo", "upgrade",
     ] {
         assert_present(&h, "env", n);
     }
@@ -128,7 +193,9 @@ fn account_help_covers_spec() {
 fn agent_and_roles_are_listed() {
     let h = help(&[]);
     for s in ["prompt", "interrupt", "events", "serve", "agent"] {
-        let ok = h.lines().any(|l| l.trim_start().starts_with(s) && l.trim_start().len() > s.len());
+        let ok = h
+            .lines()
+            .any(|l| l.trim_start().starts_with(s) && l.trim_start().len() > s.len());
         assert!(ok, "top-level help is missing `{s}`\n---\n{h}");
     }
 }
@@ -145,9 +212,11 @@ fn unimplemented_commands_fail_cleanly() {
         vec!["limits"],
         vec!["api-key", "create"],
         vec!["prompt"],
-        vec!["serve"],
     ] {
-        let out = Command::new(env!("CARGO_BIN_EXE_ori")).args(&args).output().unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_ori"))
+            .args(&args)
+            .output()
+            .unwrap();
         assert_eq!(out.status.code(), Some(1), "expected exit 1 for {args:?}");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
@@ -155,4 +224,35 @@ fn unimplemented_commands_fail_cleanly() {
             "stub must say 'not implemented', got: {stderr}"
         );
     }
+}
+
+/// `serve` and `agent` are real roles now (one binary, three roles), so their
+/// help surfaces come from the wired implementations, not a stub.
+#[test]
+fn serve_and_agent_help_are_wired() {
+    for sub in ["serve", "agent"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ori"))
+            .args([sub, "--help"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "`ori {sub} --help` failed");
+        let help = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !help.contains("not implemented"),
+            "`ori {sub} --help` must not be a stub: {help}"
+        );
+    }
+}
+
+/// On non-Linux hosts the agent role must refuse loudly rather than pretend.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn agent_refuses_off_linux() {
+    let out = Command::new(env!("CARGO_BIN_EXE_ori"))
+        .args(["agent"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Linux"), "agent must name Linux: {stderr}");
 }

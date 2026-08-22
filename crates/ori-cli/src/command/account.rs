@@ -26,7 +26,11 @@ pub async fn login(args: LoginArgs, ctx: &mut Ctx) -> Result<(), CliError> {
         .post_json::<LoginStartResponse>(
             "/cli/login/start",
             &LoginStartRequest {
-                provider: if args.google { Some("google".into()) } else { None },
+                provider: if args.google {
+                    Some("google".into())
+                } else {
+                    None
+                },
                 email: args.email.clone(),
             },
         )
@@ -131,12 +135,19 @@ pub async fn status(_args: StatusArgs, ctx: &Ctx) -> Result<(), CliError> {
     };
 
     if ctx.json {
-        print_json(&StatusOutput { account, api: api_status, config: config_status })?;
+        print_json(&StatusOutput {
+            account,
+            api: api_status,
+            config: config_status,
+        })?;
         return Ok(());
     }
 
     match &account {
-        Some(a) => println!("account:   {}  plan {}  ({})", a.identifier, a.plan, a.status),
+        Some(a) => println!(
+            "account:   {}  plan {}  ({})",
+            a.identifier, a.plan, a.status
+        ),
         None => println!("account:   not logged in"),
     }
     println!("api:       {}  {}", api_status.url, api_status.status);

@@ -43,7 +43,9 @@ impl FromStr for TypedId {
         if s.is_empty() {
             return Err("empty id".into());
         }
-        Ok(TypedId { value: s.to_string() })
+        Ok(TypedId {
+            value: s.to_string(),
+        })
     }
 }
 
@@ -58,7 +60,9 @@ impl TypedId {
             .iter()
             .map(|b| alphabet[(*b as usize) % alphabet.len()])
             .collect();
-        TypedId { value: format!("{prefix}{body}") }
+        TypedId {
+            value: format!("{prefix}{body}"),
+        }
     }
 
     /// `ori_` + 8 `[a-z0-9]` — sandbox id.
@@ -310,7 +314,11 @@ pub struct Commands {
 /// One JSON object per line on the create / resume / fork streams.
 /// Serialises to exactly the lines quoted in `docs/SPEC-API.md`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "event",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum StreamEvent {
     Created {
         id: String,
@@ -757,8 +765,11 @@ pub trait Provider: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
 
     async fn create(&self, spec: &InstanceSpec) -> Result<InstanceHandle, ProviderError>;
-    async fn clone_from(&self, src: &SnapshotRef, spec: &InstanceSpec)
-        -> Result<InstanceHandle, ProviderError>;
+    async fn clone_from(
+        &self,
+        src: &SnapshotRef,
+        spec: &InstanceSpec,
+    ) -> Result<InstanceHandle, ProviderError>;
     async fn start(&self, h: &InstanceHandle) -> Result<(), ProviderError>;
     async fn stop(&self, h: &InstanceHandle, mode: StopMode) -> Result<(), ProviderError>;
     async fn destroy(&self, h: &InstanceHandle) -> Result<(), ProviderError>;
@@ -768,7 +779,11 @@ pub trait Provider: Send + Sync {
     async fn rollback(&self, h: &InstanceHandle, s: &SnapshotRef) -> Result<(), ProviderError>;
     async fn snapshot_delete(&self, s: &SnapshotRef) -> Result<(), ProviderError>;
 
-    async fn exec(&self, h: &InstanceHandle, req: &ExecRequest) -> Result<ExecResult, ProviderError>;
+    async fn exec(
+        &self,
+        h: &InstanceHandle,
+        req: &ExecRequest,
+    ) -> Result<ExecResult, ProviderError>;
     async fn resize(&self, h: &InstanceHandle, t: MachineType) -> Result<(), ProviderError>;
     async fn addresses(&self, h: &InstanceHandle) -> Result<Addresses, ProviderError>;
 }
@@ -782,7 +797,9 @@ mod tests {
         let id = TypedId::sandbox();
         assert!(id.as_str().starts_with("ori_"));
         assert_eq!(id.as_str().len(), 4 + 8);
-        assert!(id.as_str()[4..].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+        assert!(id.as_str()[4..]
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
 
         let op = TypedId::deletion_op();
         assert!(op.as_str().starts_with("oriop_"));
@@ -806,8 +823,14 @@ mod tests {
 
     #[test]
     fn wire_names() {
-        assert_eq!(serde_json::to_string(&MachineType::Small).unwrap(), "\"small\"");
-        assert_eq!(serde_json::to_string(&BoxState::Ready).unwrap(), "\"ready\"");
+        assert_eq!(
+            serde_json::to_string(&MachineType::Small).unwrap(),
+            "\"small\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BoxState::Ready).unwrap(),
+            "\"ready\""
+        );
         assert_eq!(BoxState::Stopped.as_str(), "stopped");
         assert_eq!(BoxState::Ready.letter(), 'r');
         assert_eq!(BoxState::Init.letter(), 'p');
@@ -837,10 +860,19 @@ mod tests {
             r#"{"event":"created","id":"ori_a1b2c3d4","ttlSeconds":900,"team":null}"#
         );
 
-        let state = StreamEvent::State { id: "ori_a1b2c3d4".into(), state: "cloning".into() };
-        assert_eq!(state.to_line().trim(), r#"{"event":"state","id":"ori_a1b2c3d4","state":"cloning"}"#);
+        let state = StreamEvent::State {
+            id: "ori_a1b2c3d4".into(),
+            state: "cloning".into(),
+        };
+        assert_eq!(
+            state.to_line().trim(),
+            r#"{"event":"state","id":"ori_a1b2c3d4","state":"cloning"}"#
+        );
 
-        let accepted = StreamEvent::Accepted { id: "ori_a1b2c3d4".into(), status: "resuming".into() };
+        let accepted = StreamEvent::Accepted {
+            id: "ori_a1b2c3d4".into(),
+            status: "resuming".into(),
+        };
         assert_eq!(
             accepted.to_line().trim(),
             r#"{"event":"accepted","id":"ori_a1b2c3d4","status":"resuming"}"#
@@ -877,7 +909,10 @@ mod tests {
     #[test]
     fn filter_expansion() {
         assert_eq!(states_for_filter("r").unwrap(), vec!['r']);
-        assert_eq!(states_for_filter("rspte").unwrap(), vec!['r', 's', 'p', 't', 'e']);
+        assert_eq!(
+            states_for_filter("rspte").unwrap(),
+            vec!['r', 's', 'p', 't', 'e']
+        );
         assert!(states_for_filter("x").is_err());
         assert!(states_for_filter("").is_err());
     }

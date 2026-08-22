@@ -139,3 +139,40 @@ artifact of the file-backed pool or the storage's `content` configuration.
 Treat ZFS as a promising but untested option, not a recommendation. It is not
 on the critical path: the stopped-snapshot fork rule above already meets the
 7 s target. Block zeroing was tested and ruled out (see above).
+
+## Achieved: end-to-end through `ori` against the real host
+
+Measured 2026-08-23 with `ori serve --provider proxmox` driving the project's
+Proxmox host, exercised through the real `ori` client. Real LXC containers, real
+DHCP addresses, verified by `pct list` on the host.
+
+| Operation | Target | Achieved | Notes |
+|---|---|---|---|
+| `new` (cold, no pool) | <=7 s | **9.2 - 9.5 s** | over target; warm pool not built yet |
+| `exec` | <=1 s | 2.7 s | over target; uses `pct exec`, not the guest agent |
+| `stop` (snapshot + off) | <=5 s | **4.7 s** PASS | real snapshots confirmed on the host |
+| `resume` | <=4.5 s | **5.4 s** | close; marker file survived |
+| `fork` | <=7 s | **9.1 s** | **not 51 s** - the stopped-snapshot rule works |
+| `delete` (API returns) | <=1 s | **1.3 s** PASS | async, returns `oriop_...` |
+
+Verified semantics, not just timings:
+
+- A marker file written before `stop` was present after `resume`.
+- The same marker was present in a `fork` of that sandbox.
+- `exec` returned the container's real hostname, matching its vmid on the host.
+- `delete` removed the containers from the host.
+
+The two misses are both explained and both have a known fix:
+
+**`new` at 9.2 s vs the 7 s target.** This is the cold path - create from
+template, start, wait for DHCP. The warm pool (`plans/C5`) closes it: claiming a
+pre-started container measured 0.89 s. Until the pool exists every create pays
+full cold cost. The target is not wrong; the pool is missing.
+
+**`exec` at 2.7 s vs the 0.90 s floor.** Exec shells out through `pct exec` over
+SSH instead of the guest agent (`plans/C6`, unimplemented). `pct exec` alone
+measured 0.90 s, so the overhead is one SSH round trip per call. The guest
+agent's persistent outbound tunnel removes it.
+
+Neither is a design flaw; both are unbuilt components, with measured evidence
+that the design reaches target once they exist.

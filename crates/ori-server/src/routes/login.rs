@@ -1,12 +1,14 @@
 //! Device-code login (`ori login --google/--email`) and the self-update
 //! channel check. Both are unauthenticated entry points.
 
-use axum::Json;
 use axum::extract::{Path, State};
+use axum::Json;
 
 use crate::auth;
 use crate::error::{ApiError, ApiResult};
-use crate::proto::{Account, CliVersion, LoginPollResponse, LoginStartRequest, LoginStartResponse, TypedId};
+use crate::proto::{
+    Account, CliVersion, LoginPollResponse, LoginStartRequest, LoginStartResponse, TypedId,
+};
 use crate::state::AppState;
 use crate::util::{now_ts, parse_ts};
 
@@ -21,7 +23,10 @@ pub async fn login_start(
     let user_code = random_user_code();
     let now = now_ts();
     let expires_at = crate::util::after_seconds(LOGIN_TTL_SECONDS);
-    let url = format!("https://{}/cli/login?code={}", state.config.domain, user_code);
+    let url = format!(
+        "https://{}/cli/login?code={}",
+        state.config.domain, user_code
+    );
 
     sqlx::query(
         "INSERT INTO device_codes (id, account_id, user_code, status, created_at, expires_at) \
@@ -34,27 +39,37 @@ pub async fn login_start(
     .execute(&state.db)
     .await?;
 
-    Ok(Json(LoginStartResponse { id, code: user_code, url, expires_at }))
+    Ok(Json(LoginStartResponse {
+        id,
+        code: user_code,
+        url,
+        expires_at,
+    }))
 }
 
 pub async fn login_approve(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT status FROM device_codes WHERE id = ?").bind(&id).fetch_optional(&state.db).await?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT status FROM device_codes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?;
     let Some((status,)) = row else {
         return Err(ApiError::not_found(format!("login {id}")));
     };
     if status != "pending" {
-        return Err(ApiError::conflict(format!("login {id} is {status}, not pending")));
+        return Err(ApiError::conflict(format!(
+            "login {id} is {status}, not pending"
+        )));
     }
-    if let Some(exp) = sqlx::query_as::<_, (String,)>("SELECT expires_at FROM device_codes WHERE id = ?")
-        .bind(&id)
-        .fetch_one(&state.db)
-        .await
-        .ok()
-        .and_then(|(s,)| parse_ts(&s))
+    if let Some(exp) =
+        sqlx::query_as::<_, (String,)>("SELECT expires_at FROM device_codes WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+            .ok()
+            .and_then(|(s,)| parse_ts(&s))
     {
         if exp < chrono::Utc::now() {
             let _ = sqlx::query("UPDATE device_codes SET status = 'expired' WHERE id = ?")
@@ -119,7 +134,9 @@ pub async fn login_poll(
     };
 
     if row.status == "pending"
-        && parse_ts(&row.expires_at).map(|e| e < chrono::Utc::now()).unwrap_or(false)
+        && parse_ts(&row.expires_at)
+            .map(|e| e < chrono::Utc::now())
+            .unwrap_or(false)
     {
         sqlx::query("UPDATE device_codes SET status = 'expired' WHERE id = ?")
             .bind(&id)
@@ -129,13 +146,28 @@ pub async fn login_poll(
     }
 
     match row.status.as_str() {
-        "pending" => Ok(Json(LoginPollResponse { status: "pending".into(), token: None, account: None })),
-        "expired" => Ok(Json(LoginPollResponse { status: "expired".into(), token: None, account: None })),
+        "pending" => Ok(Json(LoginPollResponse {
+            status: "pending".into(),
+            token: None,
+            account: None,
+        })),
+        "expired" => Ok(Json(LoginPollResponse {
+            status: "expired".into(),
+            token: None,
+            account: None,
+        })),
         "approved" => {
             if row.token_issued {
-                return Ok(Json(LoginPollResponse { status: "active".into(), token: None, account: None }));
+                return Ok(Json(LoginPollResponse {
+                    status: "active".into(),
+                    token: None,
+                    account: None,
+                }));
             }
-            let token = row.token.clone().ok_or_else(|| ApiError::internal("approved login without token"))?;
+            let token = row
+                .token
+                .clone()
+                .ok_or_else(|| ApiError::internal("approved login without token"))?;
             sqlx::query("UPDATE device_codes SET token_issued = 1, token = NULL WHERE id = ?")
                 .bind(&id)
                 .execute(&state.db)
@@ -151,13 +183,13 @@ pub async fn login_poll(
                 }),
             }))
         }
-        other => Err(ApiError::internal(format!("unexpected login state {other}"))),
+        other => Err(ApiError::internal(format!(
+            "unexpected login state {other}"
+        ))),
     }
 }
 
-pub async fn cli_version(
-    State(_state): State<AppState>,
-) -> ApiResult<Json<CliVersion>> {
+pub async fn cli_version(State(_state): State<AppState>) -> ApiResult<Json<CliVersion>> {
     Ok(Json(CliVersion {
         current: "0.1.0".into(),
         latest: "0.1.0".into(),
@@ -171,7 +203,10 @@ fn random_user_code() -> String {
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes).expect("CSPRNG failure");
     let part = |i: usize, n: usize| {
-        bytes[i..i + n].iter().map(|b| alphabet[*b as usize % alphabet.len()]).collect::<String>()
+        bytes[i..i + n]
+            .iter()
+            .map(|b| alphabet[*b as usize % alphabet.len()])
+            .collect::<String>()
     };
     format!("{}-{}", part(0, 4), part(4, 4))
 }
@@ -185,7 +220,10 @@ mod tests {
         let c = random_user_code();
         assert_eq!(c.len(), 9);
         assert_eq!(c.chars().nth(4), Some('-'));
-        let no_ambiguous = c.chars().filter(|c| *c != '-').all(|c| USER_CODE_ALPHABET.contains(c));
+        let no_ambiguous = c
+            .chars()
+            .filter(|c| *c != '-')
+            .all(|c| USER_CODE_ALPHABET.contains(c));
         assert!(no_ambiguous);
     }
 }

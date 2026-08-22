@@ -11,8 +11,8 @@ use crate::error::{ApiError, CliError};
 use crate::render::{print_json, table_string};
 use crate::stream::consume_ndjson;
 use crate::wire::{
-    CreateRequest, Event, ReadyInfo, Sandbox, SandboxListResponse, SandboxResponse, StopRequest,
-    valid_types,
+    valid_types, CreateRequest, Event, ReadyInfo, Sandbox, SandboxListResponse, SandboxResponse,
+    StopRequest,
 };
 
 pub async fn new(args: NewArgs, ctx: &Ctx) -> Result<(), CliError> {
@@ -45,7 +45,11 @@ pub async fn new(args: NewArgs, ctx: &Ctx) -> Result<(), CliError> {
 }
 
 pub async fn list(args: ListArgs, ctx: &Ctx) -> Result<(), CliError> {
-    let filter = if args.all { "rspte".to_string() } else { args.filter.clone() };
+    let filter = if args.all {
+        "rspte".to_string()
+    } else {
+        args.filter.clone()
+    };
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -91,12 +95,18 @@ pub async fn info(args: InfoArgs, ctx: &Ctx) -> Result<(), CliError> {
 
 pub async fn stop(args: StopArgs, ctx: &Ctx) -> Result<(), CliError> {
     let req = StopRequest { force: args.force };
-    let res = ctx.api.post(&format!("/sandboxes/{}/stop", args.id), &req).await?;
+    let res = ctx
+        .api
+        .post(&format!("/sandboxes/{}/stop", args.id), &req)
+        .await?;
     let text = res.text().await.map_err(CliError::from)?;
     if ctx.json {
         println!("{text}");
     } else if args.force {
-        println!("stopped {} (no snapshot; changes since the last snapshot are lost)", args.id);
+        println!(
+            "stopped {} (no snapshot; changes since the last snapshot are lost)",
+            args.id
+        );
     } else {
         println!("stopped {} (snapshot taken)", args.id);
     }
@@ -137,7 +147,10 @@ pub async fn delete(args: DeleteArgs, ctx: &Ctx) -> Result<(), CliError> {
     if !args.yes {
         // Always prompt when not --yes; a piped stdout must not silence the
         // confirmation.
-        eprint!("Permanently delete sandbox {}? This cannot be undone. [y/N] ", args.id);
+        eprint!(
+            "Permanently delete sandbox {}? This cannot be undone. [y/N] ",
+            args.id
+        );
         io::stderr().flush().ok();
         let mut line = String::new();
         io::stdin().read_line(&mut line).map_err(CliError::from)?;
@@ -189,7 +202,9 @@ fn parse_env(kvs: &[String]) -> Result<HashMap<String, String>, CliError> {
     let mut map = HashMap::new();
     for kv in kvs {
         let Some((k, v)) = kv.split_once('=') else {
-            return Err(CliError::usage(format!("invalid env {kv:?}; expected KEY=VALUE")));
+            return Err(CliError::usage(format!(
+                "invalid env {kv:?}; expected KEY=VALUE"
+            )));
         };
         if k.is_empty() {
             return Err(CliError::usage(format!("invalid env {kv:?}; empty key")));
@@ -226,7 +241,16 @@ pub async fn stream_progress(ctx: &Ctx, res: Response) -> Result<StreamResult, C
                     println!("{id}: {status}");
                 }
             }
-            Ok(Event::Ready { id, state, ip, url, desktop_url, stop_after, commands, .. }) => {
+            Ok(Event::Ready {
+                id,
+                state,
+                ip,
+                url,
+                desktop_url,
+                stop_after,
+                commands,
+                ..
+            }) => {
                 ready = Some(ReadyInfo {
                     id,
                     state,
@@ -328,19 +352,32 @@ fn render_info(s: &Sandbox) {
         ("id", s.id.clone()),
         ("name", s.name.clone()),
         ("state", s.state.clone()),
-        ("type", format!("{} ({} vCPU, {} GB)", s.ty, s.vcpu, s.memory_gb)),
+        (
+            "type",
+            format!("{} ({} vCPU, {} GB)", s.ty, s.vcpu, s.memory_gb),
+        ),
         ("url", s.url.clone().unwrap_or_else(|| "-".to_string())),
         ("ip", s.ip.clone().unwrap_or_else(|| "-".to_string())),
         (
             "environment",
             format!("{} v{}", s.environment, s.environment_version),
         ),
-        ("stopAfter", s.stop_after.clone().unwrap_or_else(|| "-".to_string())),
+        (
+            "stopAfter",
+            s.stop_after.clone().unwrap_or_else(|| "-".to_string()),
+        ),
         (
             "snapshotAvailable",
-            if s.snapshot_available { "yes".to_string() } else { "no".to_string() },
+            if s.snapshot_available {
+                "yes".to_string()
+            } else {
+                "no".to_string()
+            },
         ),
-        ("setupStatus", s.setup_status.clone().unwrap_or_else(|| "-".to_string())),
+        (
+            "setupStatus",
+            s.setup_status.clone().unwrap_or_else(|| "-".to_string()),
+        ),
         ("provider", s.provider.clone()),
         ("team", s.team.clone().unwrap_or_else(|| "-".to_string())),
     ];

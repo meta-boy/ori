@@ -14,7 +14,9 @@ pub async fn exec(args: ExecArgs, ctx: &Ctx) -> Result<(), CliError> {
         return Err(CliError::usage("exec requires a command"));
     }
     if args.detach && args.status.is_some() {
-        return Err(CliError::usage("--detach and --status are mutually exclusive"));
+        return Err(CliError::usage(
+            "--detach and --status are mutually exclusive",
+        ));
     }
     let base = format!("/sandboxes/{}/exec", args.id);
 

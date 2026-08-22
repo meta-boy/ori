@@ -25,5 +25,10 @@ pub fn ndjson_body(rx: mpsc::UnboundedReceiver<Bytes>) -> Body {
 }
 
 pub fn ndjson_response(rx: mpsc::UnboundedReceiver<Bytes>, status: StatusCode) -> Response {
-    (status, [("content-type", "application/x-ndjson")], ndjson_body(rx)).into_response()
+    (
+        status,
+        [("content-type", "application/x-ndjson")],
+        ndjson_body(rx),
+    )
+        .into_response()
 }

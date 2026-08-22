@@ -411,7 +411,11 @@ pub enum EnvCommand {
     /// Remove an environment variable
     RmVar { name: String, key: String },
     /// Store a secret file
-    SetFile { name: String, key: String, path: String },
+    SetFile {
+        name: String,
+        key: String,
+        path: String,
+    },
     /// Remove a secret file
     RmFile { name: String, key: String },
     /// Add a repo to the bundle
@@ -550,16 +554,36 @@ pub struct EventsArgs {
 #[derive(Debug, Args)]
 pub struct ServeArgs {
     /// Address to bind. Env: ORI_LISTEN
-    #[arg(long, env = "ORI_LISTEN", default_value = "127.0.0.1:8080", value_name = "ADDR")]
+    #[arg(
+        long,
+        env = "ORI_LISTEN",
+        default_value = "127.0.0.1:8080",
+        value_name = "ADDR"
+    )]
     pub bind: String,
     /// SQLite database path. Env: ORI_DB_PATH
-    #[arg(long, env = "ORI_DB_PATH", default_value = "./ori.db", value_name = "PATH")]
+    #[arg(
+        long,
+        env = "ORI_DB_PATH",
+        default_value = "./ori.db",
+        value_name = "PATH"
+    )]
     pub db_path: String,
     /// Domain used to mint `<slug>.<domain>` URLs. Env: ORI_DOMAIN
-    #[arg(long, env = "ORI_DOMAIN", default_value = "ori.localhost", value_name = "DOMAIN")]
+    #[arg(
+        long,
+        env = "ORI_DOMAIN",
+        default_value = "ori.localhost",
+        value_name = "DOMAIN"
+    )]
     pub domain: String,
     /// Sandbox backend. Env: ORI_PROVIDER
-    #[arg(long, env = "ORI_PROVIDER", default_value = "mock", value_name = "PROVIDER")]
+    #[arg(
+        long,
+        env = "ORI_PROVIDER",
+        default_value = "mock",
+        value_name = "PROVIDER"
+    )]
     pub provider: ServeProvider,
 }
 

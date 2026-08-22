@@ -65,8 +65,14 @@ mod tests {
 
     #[test]
     fn json_auto_enables_when_not_a_tty() {
-        assert!(json_enabled_with(false, false), "piped stdout must enable json");
-        assert!(!json_enabled_with(false, true), "tty stdout keeps human output");
+        assert!(
+            json_enabled_with(false, false),
+            "piped stdout must enable json"
+        );
+        assert!(
+            !json_enabled_with(false, true),
+            "tty stdout keeps human output"
+        );
         assert!(json_enabled_with(true, true), "explicit --json always wins");
     }
 

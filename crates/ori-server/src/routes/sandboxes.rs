@@ -4,11 +4,11 @@
 //! after the stream starts are terminal events on the stream, not status
 //! changes — the HTTP status is long gone by then.
 
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
+use axum::Json;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
@@ -17,9 +17,9 @@ use crate::error::{ApiError, ApiResult};
 use crate::ndjson::ndjson_response;
 use crate::proto::{
     BoxState, Commands, CreateSandboxRequest, ExecRequest, ExecRequestBody, ExecResponse,
-    ExtendSandboxRequest, ForkSandboxRequest, InstanceHandle, InstanceSpec, MachineType,
-    PageInfo, ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, StopMode,
-    StopSandboxRequest, StreamEvent, TypedId,
+    ExtendSandboxRequest, ForkSandboxRequest, InstanceHandle, InstanceSpec, MachineType, PageInfo,
+    ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, StopMode, StopSandboxRequest,
+    StreamEvent, TypedId,
 };
 use crate::repo::{self, SandboxRow};
 use crate::slug;
@@ -54,7 +54,10 @@ pub async fn create_sandbox(
     Json(req): Json<CreateSandboxRequest>,
 ) -> ApiResult<Response> {
     let machine_type = req.machine_type.unwrap_or(MachineType::Default);
-    let environment = req.environment.clone().unwrap_or_else(|| "base".to_string());
+    let environment = req
+        .environment
+        .clone()
+        .unwrap_or_else(|| "base".to_string());
 
     if req.from_snapshot.is_some() {
         return Err(ApiError::invalid_request(
@@ -113,19 +116,35 @@ async fn run_create(
     {
         Ok(s) => s,
         Err(e) => {
-            let _ = emit(&tx, StreamEvent::Error {
-                id: id.clone(),
-                code: "internal".into(),
-                message: e.message,
-            });
+            let _ = emit(
+                &tx,
+                StreamEvent::Error {
+                    id: id.clone(),
+                    code: "internal".into(),
+                    message: e.message,
+                },
+            );
             return;
         }
     };
 
-    if !emit(&tx, StreamEvent::Created { id: id.clone(), ttl_seconds: ttl, team: req.team.clone() }) {
+    if !emit(
+        &tx,
+        StreamEvent::Created {
+            id: id.clone(),
+            ttl_seconds: ttl,
+            team: req.team.clone(),
+        },
+    ) {
         return;
     }
-    if !emit(&tx, StreamEvent::State { id: id.clone(), state: "provisioning".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: id.clone(),
+            state: "provisioning".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &id, &["init"], BoxState::Provisioning).await;
@@ -143,11 +162,14 @@ async fn run_create(
         Err(e) => {
             tracing::warn!(sandbox = %id, error = %e, "create: provider create failed");
             let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
-            let _ = emit(&tx, StreamEvent::Error {
-                id: id.clone(),
-                code: "provider_unavailable".into(),
-                message: e.to_string(),
-            });
+            let _ = emit(
+                &tx,
+                StreamEvent::Error {
+                    id: id.clone(),
+                    code: "provider_unavailable".into(),
+                    message: e.to_string(),
+                },
+            );
             return;
         }
     };
@@ -156,11 +178,23 @@ async fn run_create(
     // string breaks handle reconstruction and the reconciler's drift check.
     let _ = repo::set_provider_handle(&state.db, &id, &handle.id).await;
 
-    if !emit(&tx, StreamEvent::State { id: id.clone(), state: "cloning".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: id.clone(),
+            state: "cloning".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &id, &["provisioning"], BoxState::Cloning).await;
-    if !emit(&tx, StreamEvent::State { id: id.clone(), state: "ready".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: id.clone(),
+            state: "ready".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &id, &["cloning"], BoxState::Ready).await;
@@ -182,15 +216,18 @@ async fn run_create(
         let _ = repo::set_setup_status(&state.db, &id, "done", None).await;
     }
 
-    let _ = emit(&tx, StreamEvent::Ready {
-        id: id.clone(),
-        state: "ready".into(),
-        ip,
-        url: Some(url),
-        desktop_url,
-        stop_after,
-        commands: commands_for(&id),
-    });
+    let _ = emit(
+        &tx,
+        StreamEvent::Ready {
+            id: id.clone(),
+            state: "ready".into(),
+            ip,
+            url: Some(url),
+            desktop_url,
+            stop_after,
+            commands: commands_for(&id),
+        },
+    );
 }
 
 /// Insert the sandbox row, retrying on a slug collision. The uniqueness
@@ -258,14 +295,26 @@ pub async fn list_sandboxes(
         crate::proto::states_for_filter(&params.filter).map_err(ApiError::invalid_request)?;
     let states = repo::state_names_for_letters(&letters);
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let offset: u32 = params.cursor.as_deref().and_then(|c| c.parse().ok()).unwrap_or(0);
+    let offset: u32 = params
+        .cursor
+        .as_deref()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
     let (rows, has_more) =
         repo::list_sandboxes(&state.db, &auth.account_id, &states, limit, offset).await?;
     let sandboxes: Vec<Sandbox> = rows.iter().map(|r| r.to_sandbox()).collect();
-    let next_cursor = if has_more { Some((offset + limit).to_string()) } else { None };
+    let next_cursor = if has_more {
+        Some((offset + limit).to_string())
+    } else {
+        None
+    };
     Ok(Json(SandboxList {
         sandboxes,
-        page_info: PageInfo { has_more, limit, next_cursor },
+        page_info: PageInfo {
+            has_more,
+            limit,
+            next_cursor,
+        },
     }))
 }
 
@@ -275,7 +324,9 @@ pub async fn get_sandbox(
     Path(id): Path<String>,
 ) -> ApiResult<Json<SandboxDetail>> {
     let row = fetch(&state, &id, &auth.account_id).await?;
-    Ok(Json(SandboxDetail { sandbox: row.to_sandbox() }))
+    Ok(Json(SandboxDetail {
+        sandbox: row.to_sandbox(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +344,9 @@ pub async fn stop_sandbox(
 
     // idempotent: stop on a stopped/stopping sandbox is a no-op, not an error
     if matches!(current, BoxState::Stopped | BoxState::Stopping) {
-        return Ok(Json(SandboxDetail { sandbox: row.to_sandbox() }));
+        return Ok(Json(SandboxDetail {
+            sandbox: row.to_sandbox(),
+        }));
     }
     if !current.can_transition_to(BoxState::Stopping) {
         return Err(ApiError::invalid_transition(current.as_str(), "stopping"));
@@ -303,23 +356,34 @@ pub async fn stop_sandbox(
     if !repo::transition(&state.db, &id, &[current.as_str()], BoxState::Stopping).await? {
         // another request moved it; report current truth
         let fresh = repo::get_sandbox(&state.db, &id, &auth.account_id).await?;
-        return Ok(Json(SandboxDetail { sandbox: fresh.unwrap_or(row).to_sandbox() }));
+        return Ok(Json(SandboxDetail {
+            sandbox: fresh.unwrap_or(row).to_sandbox(),
+        }));
     }
 
-    let handle = InstanceHandle { provider: row.provider.clone(), id: row.provider_handle.clone() };
+    let handle = InstanceHandle {
+        provider: row.provider.clone(),
+        id: row.provider_handle.clone(),
+    };
     if !force {
         // v1: snapshots are not persisted; the provider still captures one so
         // a real backend keeps data-preserving semantics.
         let _ = state.provider.snapshot(&handle, "autostop").await;
     }
-    let mode = if force { StopMode::Force } else { StopMode::Snapshot };
+    let mode = if force {
+        StopMode::Force
+    } else {
+        StopMode::Snapshot
+    };
     if let Err(e) = state.provider.stop(&handle, mode).await {
         let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
         return Err(ApiError::provider_unavailable(e.to_string()));
     }
     repo::set_state(&state.db, &id, BoxState::Stopped).await?;
     let fresh = repo::get_sandbox(&state.db, &id, &auth.account_id).await?;
-    Ok(Json(SandboxDetail { sandbox: fresh.unwrap_or(row).to_sandbox() }))
+    Ok(Json(SandboxDetail {
+        sandbox: fresh.unwrap_or(row).to_sandbox(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -335,21 +399,24 @@ pub async fn resume_sandbox(
     let row = fetch(&state, &id, &auth.account_id).await?;
     let current = row.state_enum();
     if !current.can_transition_to(BoxState::Provisioning) {
-        return Err(ApiError::invalid_transition(current.as_str(), "provisioning"));
+        return Err(ApiError::invalid_transition(
+            current.as_str(),
+            "provisioning",
+        ));
     }
     let (tx, rx) = mpsc::unbounded_channel();
     let state2 = state.clone();
-    let req = body
-        .map(|b| b.0)
-        .unwrap_or(ResumeSandboxRequest {
-            machine_type: None,
-            ttl_seconds: None,
-            no_auto_stop: None,
-            env: None,
-            no_env: None,
-            environment: None,
-        });
-    tokio::spawn(async move { run_resume(state2, row, req, tx).await; });
+    let req = body.map(|b| b.0).unwrap_or(ResumeSandboxRequest {
+        machine_type: None,
+        ttl_seconds: None,
+        no_auto_stop: None,
+        env: None,
+        no_env: None,
+        environment: None,
+    });
+    tokio::spawn(async move {
+        run_resume(state2, row, req, tx).await;
+    });
     Ok(ndjson_response(rx, StatusCode::OK))
 }
 
@@ -360,30 +427,54 @@ async fn run_resume(
     tx: mpsc::UnboundedSender<Bytes>,
 ) {
     let id = row.id.clone();
-    if !emit(&tx, StreamEvent::Accepted { id: id.clone(), status: "resuming".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::Accepted {
+            id: id.clone(),
+            status: "resuming".into(),
+        },
+    ) {
         return;
     }
-    if !emit(&tx, StreamEvent::State { id: id.clone(), state: "provisioning".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: id.clone(),
+            state: "provisioning".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &id, &["stopped"], BoxState::Provisioning).await;
 
-    let handle = InstanceHandle { provider: row.provider.clone(), id: row.provider_handle.clone() };
+    let handle = InstanceHandle {
+        provider: row.provider.clone(),
+        id: row.provider_handle.clone(),
+    };
     if let Err(e) = state.provider.start(&handle).await {
         // If the provider lost the instance the correct fallback is
         // clone_from(latest_snapshot) — never rollback. Snapshots are not
         // wired up in this build, so the honest answer is an error.
         tracing::warn!(sandbox = %id, error = %e, "resume: provider start failed");
         let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
-        let _ = emit(&tx, StreamEvent::Error {
-            id: id.clone(),
-            code: "provider_unavailable".into(),
-            message: format!("instance lost and no snapshot is available in this build: {e}"),
-        });
+        let _ = emit(
+            &tx,
+            StreamEvent::Error {
+                id: id.clone(),
+                code: "provider_unavailable".into(),
+                message: format!("instance lost and no snapshot is available in this build: {e}"),
+            },
+        );
         return;
     }
 
-    if !emit(&tx, StreamEvent::State { id: id.clone(), state: "ready".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: id.clone(),
+            state: "ready".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &id, &["provisioning"], BoxState::Ready).await;
@@ -422,15 +513,18 @@ async fn run_resume(
         .flatten()
         .and_then(|r| r.stop_after);
 
-    let _ = emit(&tx, StreamEvent::Ready {
-        id: id.clone(),
-        state: "ready".into(),
-        ip,
-        url,
-        desktop_url,
-        stop_after,
-        commands: commands_for(&id),
-    });
+    let _ = emit(
+        &tx,
+        StreamEvent::Ready {
+            id: id.clone(),
+            state: "ready".into(),
+            ip,
+            url,
+            desktop_url,
+            stop_after,
+            commands: commands_for(&id),
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -457,19 +551,19 @@ pub async fn fork_sandbox(
     let (tx, rx) = mpsc::unbounded_channel();
     let state2 = state.clone();
     let account_id = auth.0.account_id;
-    let req = body
-        .map(|b| b.0)
-        .unwrap_or(ForkSandboxRequest {
-            machine_type: None,
-            name: None,
-            ttl_seconds: None,
-            no_auto_stop: None,
-            env: None,
-            no_env: None,
-            environment: None,
-            team: None,
-        });
-    tokio::spawn(async move { run_fork(state2, account_id, row, req, tx).await; });
+    let req = body.map(|b| b.0).unwrap_or(ForkSandboxRequest {
+        machine_type: None,
+        name: None,
+        ttl_seconds: None,
+        no_auto_stop: None,
+        env: None,
+        no_env: None,
+        environment: None,
+        team: None,
+    });
+    tokio::spawn(async move {
+        run_fork(state2, account_id, row, req, tx).await;
+    });
     Ok(ndjson_response(rx, StatusCode::ACCEPTED))
 }
 
@@ -481,7 +575,10 @@ async fn run_fork(
     tx: mpsc::UnboundedSender<Bytes>,
 ) {
     let machine_type = req.machine_type.unwrap_or(source.machine_enum());
-    let environment = req.environment.clone().unwrap_or(source.environment.clone());
+    let environment = req
+        .environment
+        .clone()
+        .unwrap_or(source.environment.clone());
     let ttl = if req.no_auto_stop.unwrap_or(false) {
         None
     } else {
@@ -510,34 +607,55 @@ async fn run_fork(
     {
         Ok(s) => s,
         Err(e) => {
-            let _ = emit(&tx, StreamEvent::Error {
-                id: child_id.clone(),
-                code: "internal".into(),
-                message: e.message,
-            });
+            let _ = emit(
+                &tx,
+                StreamEvent::Error {
+                    id: child_id.clone(),
+                    code: "internal".into(),
+                    message: e.message,
+                },
+            );
             return;
         }
     };
 
-    if !emit(&tx, StreamEvent::Created { id: child_id.clone(), ttl_seconds: ttl, team: req.team.clone() }) {
+    if !emit(
+        &tx,
+        StreamEvent::Created {
+            id: child_id.clone(),
+            ttl_seconds: ttl,
+            team: req.team.clone(),
+        },
+    ) {
         return;
     }
-    if !emit(&tx, StreamEvent::State { id: child_id.clone(), state: "provisioning".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: child_id.clone(),
+            state: "provisioning".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &child_id, &["init"], BoxState::Provisioning).await;
 
-    let source_handle =
-        InstanceHandle { provider: source.provider.clone(), id: source.provider_handle.clone() };
+    let source_handle = InstanceHandle {
+        provider: source.provider.clone(),
+        id: source.provider_handle.clone(),
+    };
     let snap = match state.provider.snapshot(&source_handle, "fork").await {
         Ok(s) => s,
         Err(e) => {
             let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
-            let _ = emit(&tx, StreamEvent::Error {
-                id: child_id.clone(),
-                code: "provider_unavailable".into(),
-                message: e.to_string(),
-            });
+            let _ = emit(
+                &tx,
+                StreamEvent::Error {
+                    id: child_id.clone(),
+                    code: "provider_unavailable".into(),
+                    message: e.to_string(),
+                },
+            );
             return;
         }
     };
@@ -555,21 +673,53 @@ async fn run_fork(
         Err(e) => {
             tracing::warn!(sandbox = %child_id, error = %e, "fork: clone_from failed");
             let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
-            let _ = emit(&tx, StreamEvent::Error {
-                id: child_id.clone(),
-                code: "provider_unavailable".into(),
-                message: e.to_string(),
-            });
+            let _ = emit(
+                &tx,
+                StreamEvent::Error {
+                    id: child_id.clone(),
+                    code: "provider_unavailable".into(),
+                    message: e.to_string(),
+                },
+            );
             return;
         }
     };
     let _ = repo::set_provider_handle(&state.db, &child_id, &handle.id).await;
 
-    if !emit(&tx, StreamEvent::State { id: child_id.clone(), state: "cloning".into() }) {
+    // `clone_from` leaves the clone **stopped** on real providers (linked
+    // clones are created stopped); fork must start it before reporting ready,
+    // or the reconciler demotes the child to `error` on the next pass.
+    if let Err(e) = state.provider.start(&handle).await {
+        tracing::warn!(sandbox = %child_id, error = %e, "fork: start clone failed");
+        let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+        let _ = emit(
+            &tx,
+            StreamEvent::Error {
+                id: child_id.clone(),
+                code: "provider_unavailable".into(),
+                message: format!("fork: cannot start clone: {e}"),
+            },
+        );
+        return;
+    }
+
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: child_id.clone(),
+            state: "cloning".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &child_id, &["provisioning"], BoxState::Cloning).await;
-    if !emit(&tx, StreamEvent::State { id: child_id.clone(), state: "ready".into() }) {
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: child_id.clone(),
+            state: "ready".into(),
+        },
+    ) {
         return;
     }
     let _ = repo::transition(&state.db, &child_id, &["cloning"], BoxState::Ready).await;
@@ -587,15 +737,18 @@ async fn run_fork(
     )
     .await;
 
-    let _ = emit(&tx, StreamEvent::Ready {
-        id: child_id.clone(),
-        state: "ready".into(),
-        ip,
-        url: Some(url),
-        desktop_url,
-        stop_after,
-        commands: commands_for(&child_id),
-    });
+    let _ = emit(
+        &tx,
+        StreamEvent::Ready {
+            id: child_id.clone(),
+            state: "ready".into(),
+            ip,
+            url: Some(url),
+            desktop_url,
+            stop_after,
+            commands: commands_for(&child_id),
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +779,9 @@ pub async fn extend_sandbox(
         ));
     }
     let fresh = repo::get_sandbox(&state.db, &id, &auth.account_id).await?;
-    Ok(Json(SandboxDetail { sandbox: fresh.unwrap_or(row).to_sandbox() }))
+    Ok(Json(SandboxDetail {
+        sandbox: fresh.unwrap_or(row).to_sandbox(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -641,7 +796,10 @@ pub async fn exec_sandbox(
 ) -> ApiResult<Json<ExecResponse>> {
     let row = fetch(&state, &id, &auth.account_id).await?;
     let current = row.state_enum();
-    if !matches!(current, BoxState::Ready | BoxState::Running | BoxState::Idle) {
+    if !matches!(
+        current,
+        BoxState::Ready | BoxState::Running | BoxState::Idle
+    ) {
         return Err(ApiError::conflict("sandbox is not running"));
     }
     if req.cmd.is_empty() {
@@ -649,7 +807,9 @@ pub async fn exec_sandbox(
     }
     if let Some(t) = req.timeout_secs {
         if !(1..=600).contains(&t) {
-            return Err(ApiError::invalid_request("timeoutSecs must be between 1 and 600"));
+            return Err(ApiError::invalid_request(
+                "timeoutSecs must be between 1 and 600",
+            ));
         }
     }
     let exec_req = ExecRequest {
@@ -658,8 +818,10 @@ pub async fn exec_sandbox(
         timeout_secs: req.timeout_secs,
         env: req.env.unwrap_or_default(),
     };
-    let handle =
-        InstanceHandle { provider: row.provider.clone(), id: row.provider_handle.clone() };
+    let handle = InstanceHandle {
+        provider: row.provider.clone(),
+        id: row.provider_handle.clone(),
+    };
     let result = state
         .provider
         .exec(&handle, &exec_req)
@@ -668,7 +830,11 @@ pub async fn exec_sandbox(
 
     let process_id = TypedId::process().to_string();
     let started = now_ts();
-    let status = if result.completed && result.exit_code == 0 { "completed" } else { "failed" };
+    let status = if result.completed && result.exit_code == 0 {
+        "completed"
+    } else {
+        "failed"
+    };
     sqlx::query(
         "INSERT INTO processes (id, account_id, sandbox_id, pid, status, exit_code, cmd, stdout, stderr, started_at, completed_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -750,7 +916,9 @@ pub async fn delete_sandbox(
 ) -> ApiResult<Json<crate::proto::OperationDetail>> {
     let _row = fetch(&state, &id, &auth.account_id).await?;
     let op = crate::deletion::start_delete(&state, &id, &auth.account_id).await?;
-    Ok(Json(crate::proto::OperationDetail { operation: op.to_operation() }))
+    Ok(Json(crate::proto::OperationDetail {
+        operation: op.to_operation(),
+    }))
 }
 
 // ---------------------------------------------------------------------------

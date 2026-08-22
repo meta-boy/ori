@@ -33,7 +33,10 @@ pub async fn consume_ndjson(
     Ok(())
 }
 
-fn dispatch_line(raw: Vec<u8>, on_line: &mut impl FnMut(&str) -> Result<(), CliError>) -> Result<(), CliError> {
+fn dispatch_line(
+    raw: Vec<u8>,
+    on_line: &mut impl FnMut(&str) -> Result<(), CliError>,
+) -> Result<(), CliError> {
     let line = String::from_utf8_lossy(&raw);
     let trimmed = line.trim();
     if !trimmed.is_empty() {

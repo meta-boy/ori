@@ -44,7 +44,12 @@ clone penalty.
 Each was reproduced against a live `ori-server` with the real `ori` client.
 Ordered by severity. This list is the input to `plans/C11-integration.md`.
 
-### 1. Cold start is impossible — no way to mint the first API key
+Status as of the C11 integration pass (2026-08-23): all six are fixed and
+verified by running the binaries. Bug 1's fix was partly in place before this
+pass (routes moved, regression test added); bugs 3/4/5/6 are resolved by this
+pass. Details and the remaining seams are in "Integration pass (C11)" below.
+
+### 1. Cold start is impossible — no way to mint the first API key — FIXED
 `POST /api/v1/api-keys` is registered inside the `protected` router in
 `crates/ori-server/src/routes/mod.rs`, which carries
 `.layer(...auth::require_auth)`. The handler in `routes/account.rs` contains
@@ -63,9 +68,9 @@ Fix: move key creation (and the login approve/poll pair) out of the protected
 router, keeping the handler's own bearer check for the non-bootstrap case.
 Add a test that a brand-new database can mint a first key and then authenticate
 with it — the cold-start path needs a regression test, since nothing else
-exercises it.
+exercises it. (`tests/server.rs::bootstrap_mints_first_key_and_it_authenticates`.)
 
-### 2. `ori list` cannot decode the server's response
+### 2. `ori list` cannot decode the server's response — FIXED
 - CLI `crates/ori-cli/src/wire.rs:38` — `#[serde(rename = "memoryGB")]`
 - Server `crates/ori-server/src/proto.rs:369` — `rename_all = "camelCase"`
   emits `memoryGb`
@@ -79,28 +84,57 @@ and the reason `plans/C8` requires asserting field names against the spec
 rather than round-tripping through our own types: both sides round-trip
 perfectly and still disagree.
 
-### 3. NDJSON reports `ready`, but the row ends up `error`
+Fix: the server field now carries `#[serde(rename = "memoryGB")]` explicitly,
+overriding the struct-level `rename_all`. Verified by `ori list` against a live
+server and by the `create_honours_machine_type_and_ttl` test.
+
+### 3. NDJSON reports `ready`, but the row ends up `error` — FIXED
 `ori new` streamed `created → provisioning → cloning → ready` and returned an
 ip, url and slug. The stored row then read `state: "error"` seconds later, with
 nothing logged. The success stream is therefore not trustworthy — something in
 the post-ready path (reconcile loop or a provider status re-check) demotes the
 sandbox without recording a reason.
 
-Whatever the cause, two things are wrong independently: the state changed with
-no diagnostic written, and a terminal `error` state carries no operator-visible
-explanation. Fix the demotion, and make any transition into `error` record why.
+Root cause (found while reproducing against the real binary): `provider_handle`
+was stored as `handle.to_string()` — the combined `"provider:id"` display
+string — but every caller reconstructs the handle as
+`InstanceHandle { provider: row.provider, id: row.provider_handle }`. The
+resulting `id` (`"mock:1"`) never matched the provider's registry key (`"1"`),
+so `status()` reported the instance missing and the reconciler demoted the
+sandbox to `error` on the next 30 s pass. `resume` failed the same way
+("not found: mock:1"). This also silently destroyed every live mock instance as
+an "orphan" on each reconcile.
 
-### 4. `exec` returns HTTP 404
+Fix: store only the provider-scoped id in `provider_handle` (the provider name
+has its own column), and compare registry keys directly in the orphan pass.
+Every transition into `error` now logs a `tracing::warn!` with the sandbox and
+the reason. Regression test:
+`tests/server.rs::reconcile_does_not_demote_a_healthy_ready_sandbox`.
+
+### 4. `exec` returns HTTP 404 — FIXED
 `ori exec <id> echo hello` → `HTTP 404 404: Not Found`. Route/verb or path shape
 mismatch between client and server. Verify against `docs/SPEC-API.md`.
 
-### 5. Two binaries, not one
+Root cause: the route table used axum-0.8-style `{id}` path params, but this
+workspace pins axum 0.7 / matchit 0.7, which use `:id`. `{id}` was a literal
+segment, so `/sandboxes/abc/exec` never matched. All routes now use `:id`
+(`crates/ori-server/src/routes/mod.rs`), verified by `ori exec` against a live
+server (real exit codes propagate) and by the `exec_runs_and_reports_exit_codes`
+test.
+
+### 5. Two binaries, not one — FIXED
 `cargo build --workspace` produces both `ori` and `ori-server`, and `ori serve`
 in the client is a stub. `docs/ARCHITECTURE.md` specifies **one** binary with
 three roles. Wire `ori serve` to the control plane and `ori agent` to the guest
 agent, and stop shipping a second artifact.
 
-### 6. The Proxmox provider is never wired in
+Fix: `ori-server` is now library-only (no `[[bin]]`; `src/main.rs` deleted) and
+`ori serve` in `ori-cli` parses `--bind/--db-path/--domain/--provider` and calls
+`ori_server::run`. `ori agent` is Linux-gated and calls `ori_agent::run`.
+`cargo build --workspace` ships exactly one binary, `ori`; `ori --help`,
+`ori serve --help`, `ori agent --help` all work.
+
+### 6. The Proxmox provider is never wired in — FIXED
 `ori-server serve` exposes only `--bind`, `--db-path`, `--domain`. There is no
 provider selection, so the server always runs `MockProvider`. The Proxmox
 provider in `ori-providers` — which is implemented, compiles, polls UPIDs
@@ -109,8 +143,74 @@ server. **Nothing has yet created a real container.** This is the single most
 important gap: until it closes, the product is an API with a simulator behind it.
 
 Fix: a `--provider proxmox|docker|mock` flag plus provider config (host, token,
-node, storage, bridge, template) from env, and a startup preflight that fails
-loudly on a non-snapshot-capable storage.
+node, storage, bridge, template) from `ORI_PVE_*` env, and a startup preflight
+that fails loudly on a non-snapshot-capable storage. `ori serve --provider proxmox`
+against the `.env.local` host now creates, stops, resumes, forks (linked clone)
+and execs into **real LXC containers**. `--provider docker` fails with a clear
+"not implemented in this build" error.
+
+## Integration pass (C11): what changed and what is still open
+
+### Provider wiring is an adapter, not a reconciliation
+
+`ori-server` now depends on `ori-providers` and drives it through a new
+`crates/ori-server/src/providers.rs` `ProxmoxAdapter` that implements the
+server's `proto::Provider` trait by translating onto `ori_providers::reconcile`
+at the boundary. The two crates still have **two definitions of the Provider
+trait and its domain types** (the server's `proto.rs` and the provider's
+`reconcile.rs`). Per `docs/DIVERGENCES.md` those were supposed to collapse into
+`ori-proto`, which is still a placeholder. Rather than author the shared crate
+and rewrite both sides in this pass, the adapter bridges them — wiring over
+rewriting, as the other agent owns `crates/ori-providers/src/proxmox`. The
+collapse into `ori-proto` remains the recommended next step.
+
+### VMID allocation must consult the live node, not just the counter
+
+The architecture's "allocate from our own SQLite counter, then confirm against
+`/cluster/nextid`" is not sufficient: `nextid` (105 on the test host) says
+nothing about hand-assigned ids (a prior run left an `ori` container at vmid
+1000). The adapter's `allocate_vmid` therefore reads the node's existing VMID
+list (`GET /nodes/{n}/lxc`) each allocation, skips taken ids (burning them in
+`vmid_allocations` so they are never retried), and stays out of the 9000-9099
+test range. The provider's own `ensure_vmid_free` (`vmid < nextid`) remains as
+a second line of defence against PVE auto-allocation.
+
+### Fork must start the clone
+
+The Proxmox `clone_from` returns a clone that is left **stopped** (that is the
+contract in `docs/ARCHITECTURE.md`). The server's fork path never started it,
+so a forked sandbox reported `ready` with `ip: null` and was demoted to
+`error` on the next reconcile. `run_fork` now calls `start()` after
+`clone_from`, before announcing ready. The mock never showed this because its
+`clone_from` registers a running instance.
+
+### `provider_handle` semantics are now "provider-scoped id only"
+
+`InstanceHandle::Display` is still `provider:id` (used in logs), but
+`provider_handle` in SQLite stores just the id, matching how every caller
+reconstructs the handle (`provider` comes from its own column). Anything that
+writes `handle.to_string()` into `provider_handle` is a bug.
+
+### Open items (not fixed here, recorded honestly)
+
+- **`ori serve --config <toml>`** — the systemd unit
+  (`infra/systemd/ori-serve.service`) runs `ori serve --config /etc/ori/serve.toml`,
+  but serve config is env-only in this build. The flag is not accepted; a TOML
+  loader is a small follow-up.
+- **`scripts/golden-build.sh`** looks for a separate `target/release/ori-agent`
+  artifact, which no longer exists (one binary now). It should bake the `ori`
+  binary and invoke `ori agent --config ...`; left to the ops owner.
+- **`ori-agent` is a placeholder.** `ori agent` runs and exits with an honest
+  "not landed yet" message; the real guest agent (exec / port-host / file ops)
+  is C6's deliverable. The wiring (Linux-gated entrypoint, no `ori-providers`
+  dependency) is in place.
+- **The pre-existing clippy issues in `ori-server`** (`proto.rs` `&BASE36`,
+  `ndjson.rs` `match`-on-`Option`, `insert_with_slug` argument count) predate
+  this pass and are left alone rather than refactored mid-integration.
+- **Self-signed PVE certs** require `ORI_PVE_INSECURE=1` (or a CA via
+  `ORI_PVE_CA_PEM`); the `.env.local` host presents a self-signed cert, so a
+  bare `ORI_PVE_*` environment fails preflight with a TLS error until that is
+  set. The provider logs loudly when insecure mode is on.
 
 ### 7. Two `Provider` traits — the adapter cannot call the provider
 

@@ -15,8 +15,13 @@ pub async fn open(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
-    let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await?;
-    migrate(&pool).await.map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(8)
+        .connect_with(opts)
+        .await?;
+    migrate(&pool)
+        .await
+        .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
     Ok(pool)
 }
 
@@ -27,8 +32,13 @@ pub async fn open_in_memory() -> Result<SqlitePool, sqlx::Error> {
         .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
-    let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
-    migrate(&pool).await.map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await?;
+    migrate(&pool)
+        .await
+        .map_err(|e| sqlx::Error::Migrate(Box::new(e)))?;
     Ok(pool)
 }
 

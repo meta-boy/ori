@@ -7,11 +7,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::Router;
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{header, Method, Request, StatusCode};
+use axum::Router;
 use http_body_util::BodyExt;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use tower::ServiceExt;
 
@@ -68,25 +68,31 @@ async fn call(app: &Router, req: Request<Body>) -> (StatusCode, String) {
 
 async fn call_json(app: &Router, req: Request<Body>) -> (StatusCode, Value) {
     let (status, body) = call(app, req).await;
-    let v = if body.trim().is_empty() { Value::Null } else { serde_json::from_str(&body).unwrap() };
+    let v = if body.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(&body).unwrap()
+    };
     (status, v)
 }
 
 async fn bootstrap_key(app: &Router) -> String {
-    let (status, v) =
-        call_json(app, req(Method::POST, "/api/v1/api-keys", None, Some(json!({})))).await;
+    let (status, v) = call_json(
+        app,
+        req(Method::POST, "/api/v1/api-keys", None, Some(json!({}))),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "bootstrap key creation: {v}");
     v["secret"].as_str().unwrap().to_string()
 }
 
 /// Create a sandbox and return (id, full stream body).
-async fn create_sandbox(
-    app: &Router,
-    token: &str,
-    body: Value,
-) -> (String, String) {
-    let (status, stream) =
-        call(app, req(Method::POST, "/api/v1/sandboxes", Some(token), Some(body))).await;
+async fn create_sandbox(app: &Router, token: &str, body: Value) -> (String, String) {
+    let (status, stream) = call(
+        app,
+        req(Method::POST, "/api/v1/sandboxes", Some(token), Some(body)),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "create status; stream: {stream}");
     let id = parse_stream(&stream)
         .into_iter()
@@ -95,17 +101,29 @@ async fn create_sandbox(
     (id, stream)
 }
 
-/// Parse an NDJSON stream into its JSON objects.
+/// Parse an NDJSON stream into its JSON objects. Tolerates chunked-transfer
+/// framing from a raw-socket read: chunk-size lines and empty lines are
+/// skipped, and trailing `\r` (from `\r\n` framing) is trimmed.
 fn parse_stream(stream: &str) -> Vec<Value> {
     stream
         .lines()
-        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && l.starts_with('{'))
         .map(|l| serde_json::from_str(l).unwrap())
         .collect()
 }
 
 async fn sandbox_info(app: &Router, token: &str, id: &str) -> (StatusCode, Value) {
-    call_json(app, req(Method::GET, &format!("/api/v1/sandboxes/{id}"), Some(token), None)).await
+    call_json(
+        app,
+        req(
+            Method::GET,
+            &format!("/api/v1/sandboxes/{id}"),
+            Some(token),
+            None,
+        ),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -120,8 +138,11 @@ async fn auth_requires_bearer_token() {
     assert_eq!(v["error"]["code"], "unauthorized");
 
     // wrong key
-    let (status, v) =
-        call_json(&t.app, req(Method::GET, "/api/v1/me", Some("ori_sk_bogus"), None)).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/me", Some("ori_sk_bogus"), None),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(v["error"]["code"], "unauthorized");
 }
@@ -129,19 +150,18 @@ async fn auth_requires_bearer_token() {
 #[tokio::test]
 async fn bootstrap_mints_first_key_and_it_authenticates() {
     let t = test_app().await;
-    let (status, v) =
-        call_json(&t.app, req(Method::POST, "/api/v1/api-keys", None, Some(json!({})))).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::POST, "/api/v1/api-keys", None, Some(json!({}))),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let secret = v["secret"].as_str().unwrap().to_string();
     assert!(secret.starts_with("ori_sk_"));
     assert_eq!(v["prefix"].as_str().unwrap().len(), 6);
     assert_eq!(v["lastFour"].as_str().unwrap().len(), 4);
 
-    let (status, v) = call_json(
-        &t.app,
-        req(Method::GET, "/api/v1/me", Some(&secret), None),
-    )
-    .await;
+    let (status, v) = call_json(&t.app, req(Method::GET, "/api/v1/me", Some(&secret), None)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["identifier"], "default");
     assert_eq!(v["loginState"], "active");
@@ -149,8 +169,11 @@ async fn bootstrap_mints_first_key_and_it_authenticates() {
     assert_eq!(v["status"], "active");
 
     // second key without a token must now be rejected (bootstrap is over)
-    let (status, _) =
-        call_json(&t.app, req(Method::POST, "/api/v1/api-keys", None, Some(json!({})))).await;
+    let (status, _) = call_json(
+        &t.app,
+        req(Method::POST, "/api/v1/api-keys", None, Some(json!({}))),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -158,8 +181,11 @@ async fn bootstrap_mints_first_key_and_it_authenticates() {
 async fn key_listing_shows_prefix_and_last_four_not_secret() {
     let t = test_app().await;
     let secret = bootstrap_key(&t.app).await;
-    let (status, v) =
-        call_json(&t.app, req(Method::GET, "/api/v1/api-keys", Some(&secret), None)).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/api-keys", Some(&secret), None),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let key = &v["apiKeys"][0];
     assert!(key["prefix"].as_str().unwrap().starts_with("ori_s"));
@@ -171,12 +197,20 @@ async fn key_listing_shows_prefix_and_last_four_not_secret() {
 async fn revoke_kills_the_key() {
     let t = test_app().await;
     let secret = bootstrap_key(&t.app).await;
-    let (_status, v) =
-        call_json(&t.app, req(Method::GET, "/api/v1/api-keys", Some(&secret), None)).await;
+    let (_status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/api-keys", Some(&secret), None),
+    )
+    .await;
     let id = v["apiKeys"][0]["id"].as_str().unwrap().to_string();
     let (status, _) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/api-keys/{id}/revoke"), Some(&secret), None),
+        req(
+            Method::POST,
+            &format!("/api/v1/api-keys/{id}/revoke"),
+            Some(&secret),
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -194,8 +228,11 @@ async fn limits_reflects_counts() {
     let token = bootstrap_key(&t.app).await;
     let (_, id) = create_sandbox(&t.app, &token, json!({})).await;
     let _ = id;
-    let (status, v) =
-        call_json(&t.app, req(Method::GET, "/api/v1/limits", Some(&token), None)).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/limits", Some(&token), None),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["plan"], "free");
     assert_eq!(v["currentTotal"], 1);
@@ -207,8 +244,11 @@ async fn limits_reflects_counts() {
 async fn teams_is_single_personal_scope() {
     let t = test_app().await;
     let token = bootstrap_key(&t.app).await;
-    let (status, v) =
-        call_json(&t.app, req(Method::GET, "/api/v1/teams", Some(&token), None)).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/teams", Some(&token), None),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let team = &v["teams"][0];
     assert_eq!(team["id"], "personal");
@@ -226,7 +266,10 @@ async fn create_streams_ndjson_with_exact_line_shapes() {
     let token = bootstrap_key(&t.app).await;
     let (id, stream) = create_sandbox(&t.app, &token, json!({ "type": "small" })).await;
     let events = parse_stream(&stream);
-    let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
     assert_eq!(kinds, vec!["created", "state", "state", "state", "ready"]);
 
     assert_eq!(events[0]["event"], "created");
@@ -245,7 +288,10 @@ async fn create_streams_ndjson_with_exact_line_shapes() {
     assert!(events[4]["url"].as_str().unwrap().starts_with("https://"));
     assert!(events[4]["url"].as_str().unwrap().ends_with(".ori.test"));
     assert!(events[4]["commands"]["ssh"].as_str().unwrap().contains(&id));
-    assert!(events[4]["commands"]["forward"].as_str().unwrap().contains(&id));
+    assert!(events[4]["commands"]["forward"]
+        .as_str()
+        .unwrap()
+        .contains(&id));
 }
 
 #[tokio::test]
@@ -304,12 +350,23 @@ async fn create_defaults_machine_type() {
 async fn create_rejects_snapshot_from() {
     let t = test_app().await;
     let token = bootstrap_key(&t.app).await;
-    let (status, v) =
-        call_json(&t.app, req(Method::POST, "/api/v1/sandboxes", Some(&token), Some(json!({
-            "fromSnapshot": "orisnap_abc"
-        })))).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            "/api/v1/sandboxes",
+            Some(&token),
+            Some(json!({
+                "fromSnapshot": "orisnap_abc"
+            })),
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(v["error"]["message"].as_str().unwrap().contains("not implemented"));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not implemented"));
 }
 
 #[tokio::test]
@@ -319,8 +376,16 @@ async fn create_hits_quota() {
     for _ in 0..20 {
         create_sandbox(&t.app, &token, json!({})).await;
     }
-    let (status, v) =
-        call_json(&t.app, req(Method::POST, "/api/v1/sandboxes", Some(&token), Some(json!({})))).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            "/api/v1/sandboxes",
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(v["error"]["code"], "quota_exceeded");
 }
@@ -332,8 +397,11 @@ async fn list_defaults_to_running_filter_and_paginates() {
     for _ in 0..3 {
         create_sandbox(&t.app, &token, json!({})).await;
     }
-    let (status, v) =
-        call_json(&t.app, req(Method::GET, "/api/v1/sandboxes", Some(&token), None)).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/sandboxes", Some(&token), None),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["sandboxes"].as_array().unwrap().len(), 3);
     assert_eq!(v["pageInfo"]["hasMore"], false);
@@ -351,7 +419,12 @@ async fn list_defaults_to_running_filter_and_paginates() {
     let cursor = v["pageInfo"]["nextCursor"].as_str().unwrap();
     let (_, v2) = call_json(
         &t.app,
-        req(Method::GET, &format!("/api/v1/sandboxes?limit=2&cursor={cursor}"), Some(&token), None),
+        req(
+            Method::GET,
+            &format!("/api/v1/sandboxes?limit=2&cursor={cursor}"),
+            Some(&token),
+            None,
+        ),
     )
     .await;
     assert_eq!(v2["sandboxes"].as_array().unwrap().len(), 1);
@@ -366,15 +439,29 @@ async fn list_respects_state_filter() {
     // stop one so the running-only default filter excludes it
     let (status, _) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/stop"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, v) = call_json(&t.app, req(Method::GET, "/api/v1/sandboxes", Some(&token), None)).await;
+    let (_, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/sandboxes", Some(&token), None),
+    )
+    .await;
     assert_eq!(v["sandboxes"].as_array().unwrap().len(), 0);
     let (_, v) = call_json(
         &t.app,
-        req(Method::GET, "/api/v1/sandboxes?filter=rspte", Some(&token), None),
+        req(
+            Method::GET,
+            "/api/v1/sandboxes?filter=rspte",
+            Some(&token),
+            None,
+        ),
     )
     .await;
     assert_eq!(v["sandboxes"].as_array().unwrap().len(), 1);
@@ -382,7 +469,12 @@ async fn list_respects_state_filter() {
     // bad filter letter is a 400
     let (status, _) = call_json(
         &t.app,
-        req(Method::GET, "/api/v1/sandboxes?filter=x", Some(&token), None),
+        req(
+            Method::GET,
+            "/api/v1/sandboxes?filter=x",
+            Some(&token),
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -405,7 +497,12 @@ async fn stop_is_idempotent_and_clears_running_state() {
 
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/stop"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -414,7 +511,12 @@ async fn stop_is_idempotent_and_clears_running_state() {
     // stopping again is a 200 no-op, not a 409
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/stop"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -434,24 +536,48 @@ async fn resume_streams_accepted_and_is_409_on_running() {
     // resume on a running sandbox is a 409 naming the edge
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/resume"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/resume"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(v["error"]["code"], "invalid_transition");
-    assert!(v["error"]["message"].as_str().unwrap().contains("ready -> provisioning"));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("ready -> provisioning"));
 
     // stop, then resume streams accepted + states + ready
     let (_, _) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/stop"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
-    let (status, stream) =
-        call(&t.app, req(Method::POST, &format!("/api/v1/sandboxes/{id}/resume"), Some(&token), Some(json!({})))).await;
+    let (status, stream) = call(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/resume"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let events = parse_stream(&stream);
-    let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
     assert_eq!(kinds, vec!["accepted", "state", "state", "ready"]);
     assert_eq!(events[0]["status"], "resuming");
 
@@ -468,7 +594,12 @@ async fn fork_returns_202_and_leaves_source_untouched() {
 
     let (status, stream) = call(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{src}/fork"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/fork"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
@@ -494,8 +625,16 @@ async fn delete_returns_operation_then_completes() {
     let token = bootstrap_key(&t.app).await;
     let (id, _) = create_sandbox(&t.app, &token, json!({})).await;
 
-    let (status, v) =
-        call_json(&t.app, req(Method::DELETE, &format!("/api/v1/sandboxes/{id}"), Some(&token), None)).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::DELETE,
+            &format!("/api/v1/sandboxes/{id}"),
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let op = &v["operation"];
     let op_id = op["id"].as_str().unwrap();
@@ -512,7 +651,12 @@ async fn delete_returns_operation_then_completes() {
     for _ in 0..50 {
         let (s, v) = call_json(
             &t.app,
-            req(Method::GET, &format!("/api/v1/operations/{op_id}"), Some(&token), None),
+            req(
+                Method::GET,
+                &format!("/api/v1/operations/{op_id}"),
+                Some(&token),
+                None,
+            ),
         )
         .await;
         assert_eq!(s, StatusCode::OK);
@@ -534,11 +678,16 @@ async fn exec_runs_and_reports_exit_codes() {
 
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/exec"), Some(&token), Some(json!({
-            "command": ["echo", "hello"],
-            "cwd": "/root",
-            "timeout": 30,
-        }))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/exec"),
+            Some(&token),
+            Some(json!({
+                "command": ["echo", "hello"],
+                "cwd": "/root",
+                "timeout": 30,
+            })),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -550,9 +699,14 @@ async fn exec_runs_and_reports_exit_codes() {
     // a failing command surfaces its exit code
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/exec"), Some(&token), Some(json!({
-            "command": ["fail"],
-        }))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/exec"),
+            Some(&token),
+            Some(json!({
+                "command": ["fail"],
+            })),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -562,18 +716,31 @@ async fn exec_runs_and_reports_exit_codes() {
     // exec on a stopped sandbox is a 409
     let (_, _) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/stop"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/exec"), Some(&token), Some(json!({
-            "command": ["echo"],
-        }))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/exec"),
+            Some(&token),
+            Some(json!({
+                "command": ["echo"],
+            })),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(v["error"]["message"].as_str().unwrap().contains("not running"));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not running"));
 }
 
 #[tokio::test]
@@ -583,16 +750,26 @@ async fn exec_status_polls_a_detached_pid() {
     let (id, _) = create_sandbox(&t.app, &token, json!({})).await;
     let (_, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/exec"), Some(&token), Some(json!({
-            "command": ["echo", "hi"],
-            "detach": true,
-        }))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/exec"),
+            Some(&token),
+            Some(json!({
+                "command": ["echo", "hi"],
+                "detach": true,
+            })),
+        ),
     )
     .await;
     let pid = v["pid"].as_i64().unwrap();
     let (status, v) = call_json(
         &t.app,
-        req(Method::GET, &format!("/api/v1/sandboxes/{id}/exec/{pid}"), Some(&token), None),
+        req(
+            Method::GET,
+            &format!("/api/v1/sandboxes/{id}/exec/{pid}"),
+            Some(&token),
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -610,22 +787,35 @@ async fn extend_moves_the_deadline() {
 
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/extend"), Some(&token), Some(json!({
-            "hours": 2
-        }))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/extend"),
+            Some(&token),
+            Some(json!({
+                "hours": 2
+            })),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let after = v["sandbox"]["stopAfter"].as_str().unwrap();
     assert_ne!(after, before);
-    assert!(after > before.as_str(), "deadline moved later: {after} <= {before}");
+    assert!(
+        after > before.as_str(),
+        "deadline moved later: {after} <= {before}"
+    );
 
     // no-auto-stop clears it
     let (_, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/extend"), Some(&token), Some(json!({
-            "noAutoStop": true
-        }))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/extend"),
+            Some(&token),
+            Some(json!({
+                "noAutoStop": true
+            })),
+        ),
     )
     .await;
     assert_eq!(v["sandbox"]["stopAfter"], Value::Null);
@@ -690,17 +880,33 @@ async fn reconciler_marks_drift_error_and_destroys_orphans() {
     assert_eq!(v["sandbox"]["state"], "error");
 
     // 2. orphan: a provider instance with no DB sandbox is destroyed
-    let orphan = t.provider.create(&ori_server::proto::InstanceSpec {
-        id: "orphan".into(),
-        name: "orphan".into(),
-        machine_type: MachineType::Default,
-        environment: "base".into(),
-        environment_version: 1,
-        env_vars: Default::default(),
-    }).await.unwrap();
-    assert!(t.provider.registry.lock().unwrap().instances.contains_key(&orphan.id));
+    let orphan = t
+        .provider
+        .create(&ori_server::proto::InstanceSpec {
+            id: "orphan".into(),
+            name: "orphan".into(),
+            machine_type: MachineType::Default,
+            environment: "base".into(),
+            environment_version: 1,
+            env_vars: Default::default(),
+        })
+        .await
+        .unwrap();
+    assert!(t
+        .provider
+        .registry
+        .lock()
+        .unwrap()
+        .instances
+        .contains_key(&orphan.id));
     tasks::reconcile_once(&state).await.unwrap();
-    assert!(!t.provider.registry.lock().unwrap().instances.contains_key(&orphan.id));
+    assert!(!t
+        .provider
+        .registry
+        .lock()
+        .unwrap()
+        .instances
+        .contains_key(&orphan.id));
 }
 
 /// Bug 3 regression: a sandbox whose provider still reports it up must survive
@@ -721,25 +927,41 @@ async fn reconcile_does_not_demote_a_healthy_ready_sandbox() {
     tasks::reconcile_once(&state).await.unwrap();
 
     let (_, v) = sandbox_info(&t.app, &token, &id).await;
-    assert_eq!(v["sandbox"]["state"], "ready", "healthy sandbox was demoted");
+    assert_eq!(
+        v["sandbox"]["state"], "ready",
+        "healthy sandbox was demoted"
+    );
     // the instance is still there (not destroyed as an orphan)
     assert_eq!(t.provider.registry.lock().unwrap().instances.len(), 1);
 
     // and it can still be stopped + resumed, exercising the handle round-trip
     let (status, _) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/stop"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let (status, stream) = call(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/resume"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/resume"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let events = parse_stream(&stream);
-    let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
     assert_eq!(kinds, vec!["accepted", "state", "state", "ready"]);
 }
 
@@ -752,7 +974,12 @@ async fn device_login_full_flow() {
     let t = test_app().await;
     let (status, start) = call_json(
         &t.app,
-        req(Method::POST, "/api/v1/cli/login/start", None, Some(json!({ "provider": "google" }))),
+        req(
+            Method::POST,
+            "/api/v1/cli/login/start",
+            None,
+            Some(json!({ "provider": "google" })),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -764,7 +991,12 @@ async fn device_login_full_flow() {
     // pending until approved
     let (status, v) = call_json(
         &t.app,
-        req(Method::GET, &format!("/api/v1/cli/login/poll/{id}"), None, None),
+        req(
+            Method::GET,
+            &format!("/api/v1/cli/login/poll/{id}"),
+            None,
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -773,7 +1005,12 @@ async fn device_login_full_flow() {
     // approve mints a key
     let (status, _) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/cli/login/{id}/approve"), None, None),
+        req(
+            Method::POST,
+            &format!("/api/v1/cli/login/{id}/approve"),
+            None,
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -781,14 +1018,24 @@ async fn device_login_full_flow() {
     // poll hands the token out exactly once
     let (_, v) = call_json(
         &t.app,
-        req(Method::GET, &format!("/api/v1/cli/login/poll/{id}"), None, None),
+        req(
+            Method::GET,
+            &format!("/api/v1/cli/login/poll/{id}"),
+            None,
+            None,
+        ),
     )
     .await;
     assert_eq!(v["status"], "active");
     let token = v["token"].as_str().unwrap().to_string();
     let (_, v) = call_json(
         &t.app,
-        req(Method::GET, &format!("/api/v1/cli/login/poll/{id}"), None, None),
+        req(
+            Method::GET,
+            &format!("/api/v1/cli/login/poll/{id}"),
+            None,
+            None,
+        ),
     )
     .await;
     assert_eq!(v["status"], "active");
@@ -807,7 +1054,12 @@ async fn prompt_interrupt_events_return_not_implemented() {
     // prompt/interrupt are POST; the events stream is a GET
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/prompt"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/prompt"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
@@ -815,7 +1067,12 @@ async fn prompt_interrupt_events_return_not_implemented() {
 
     let (status, v) = call_json(
         &t.app,
-        req(Method::POST, &format!("/api/v1/sandboxes/{id}/interrupt"), Some(&token), Some(json!({}))),
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/interrupt"),
+            Some(&token),
+            Some(json!({})),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
@@ -823,7 +1080,12 @@ async fn prompt_interrupt_events_return_not_implemented() {
 
     let (status, v) = call_json(
         &t.app,
-        req(Method::GET, &format!("/api/v1/sandboxes/{id}/events"), Some(&token), None),
+        req(
+            Method::GET,
+            &format!("/api/v1/sandboxes/{id}/events"),
+            Some(&token),
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
@@ -840,12 +1102,17 @@ async fn ndjson_is_flushed_per_line_not_buffered() {
 
     let db = db::open_in_memory().await.unwrap();
     let provider = Arc::new(MockProvider::new().with_create_delay(Duration::from_millis(1200)));
-    let config = Config { domain: "ori.test".into(), ..Config::default() };
+    let config = Config {
+        domain: "ori.test".into(),
+        ..Config::default()
+    };
     let app = ori_server::build_app(db.clone(), provider.clone(), config);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
 
     // bootstrap a key over this server
     let body = r#"{}"#;
@@ -901,25 +1168,39 @@ async fn ndjson_is_flushed_per_line_not_buffered() {
     // socket read includes the HTTP response headers)
     let body = received.split("\r\n\r\n").nth(1).unwrap_or(&received);
     let events = parse_stream(body);
-    let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
     assert_eq!(kinds, vec!["created", "state", "state", "state", "ready"]);
 
     // the harness endpoints still work: /me with the key
     let resp = raw_request(&addr, "GET", "/api/v1/me", &auth, "").await;
-    assert!(resp.contains("\"status\":\"active\""), "me response: {resp}");
+    assert!(
+        resp.contains("\"status\":\"active\""),
+        "me response: {resp}"
+    );
 }
 
 /// Minimal raw-HTTP client over a loopback socket.
-async fn raw_request(addr: &std::net::SocketAddr, method: &str, path: &str, auth: &str, body: &str) -> String {
+async fn raw_request(
+    addr: &std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    auth: &str,
+    body: &str,
+) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let auth_hdr = if auth.is_empty() { String::new() } else { format!("Authorization: {auth}\r\n") };
+    let auth_hdr = if auth.is_empty() {
+        String::new()
+    } else {
+        format!("Authorization: {auth}\r\n")
+    };
     let body = body.to_string();
     let content_len = body.len();
     let req_text = if method == "GET" {
-        format!(
-            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\n{auth_hdr}Connection: close\r\n\r\n"
-        )
+        format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\n{auth_hdr}Connection: close\r\n\r\n")
     } else {
         format!(
             "{method} {path} HTTP/1.1\r\nHost: {addr}\r\n{auth_hdr}Content-Type: application/json\r\nContent-Length: {content_len}\r\nConnection: close\r\n\r\n{body}"

@@ -5,7 +5,10 @@
 use std::process::Command;
 
 fn exit_code(args: &[&str]) -> i32 {
-    let out = Command::new(env!("CARGO_BIN_EXE_ori")).args(args).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ori"))
+        .args(args)
+        .output()
+        .unwrap();
     out.status.code().unwrap()
 }
 
@@ -23,8 +26,16 @@ fn help_is_zero() {
 #[test]
 fn usage_error_is_one() {
     assert_eq!(exit_code(&[]), 1, "missing subcommand is a usage error");
-    assert_eq!(exit_code(&["list", "--nope"]), 1, "unknown flag is a usage error");
-    assert_eq!(exit_code(&["exec", "ori_x", "--timeout", "0", "true"]), 1, "out-of-range value");
+    assert_eq!(
+        exit_code(&["list", "--nope"]),
+        1,
+        "unknown flag is a usage error"
+    );
+    assert_eq!(
+        exit_code(&["exec", "ori_x", "--timeout", "0", "true"]),
+        1,
+        "out-of-range value"
+    );
 }
 
 #[test]
@@ -38,5 +49,8 @@ fn exec_remote_code_is_propagated() {
     // `_debug` has no API dependency; remote-code propagation is covered by the
     // exec handler unit path and the mock-server smoke test, so assert the
     // mapping function here instead.
-    assert_eq!(ori_cli::error::exit_code(&ori_cli::error::CliError::RemoteExit(42)), 42);
+    assert_eq!(
+        ori_cli::error::exit_code(&ori_cli::error::CliError::RemoteExit(42)),
+        42
+    );
 }

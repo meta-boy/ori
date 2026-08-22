@@ -24,14 +24,17 @@ use sqlx::SqlitePool;
 use tokio::net::TcpListener;
 
 use crate::config::Config;
-use crate::mock::MockProvider;
 use crate::proto::Provider;
 use crate::state::AppState;
 
 /// Build the route table over a caller-supplied database and provider.
 /// Tests hand over an in-memory pool and a `MockProvider`.
 pub fn build_app(db: SqlitePool, provider: Arc<dyn Provider>, config: Config) -> axum::Router {
-    let state = AppState { db, provider, config: Arc::new(config) };
+    let state = AppState {
+        db,
+        provider,
+        config: Arc::new(config),
+    };
     routes::router(state)
 }
 
@@ -42,7 +45,11 @@ pub fn build_app(db: SqlitePool, provider: Arc<dyn Provider>, config: Config) ->
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = db::open(&config.database_path).await?;
     let provider = providers::build_provider(&config, db.clone()).await?;
-    let state = AppState { db, provider, config: Arc::new(config.clone()) };
+    let state = AppState {
+        db,
+        provider,
+        config: Arc::new(config.clone()),
+    };
 
     // startup reconciliation: the provider is truth for existence
     if let Err(e) = tasks::reconcile_once(&state).await {

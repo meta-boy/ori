@@ -6,8 +6,7 @@ use crate::error::CliError;
 
 #[cfg(target_os = "linux")]
 pub async fn agent(args: AgentArgs) -> Result<(), CliError> {
-    ori_agent::run(args.config)
-        .map_err(|e| CliError::usage(format!("agent: {e}")))
+    ori_agent::run(args.config).map_err(|e| CliError::usage(format!("agent: {e}")))
 }
 
 #[cfg(not(target_os = "linux"))]

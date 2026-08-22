@@ -1,7 +1,7 @@
 //! Account identity, limits, teams, and API keys.
 
-use axum::Json;
 use axum::extract::{Extension, Path, State};
+use axum::Json;
 
 use crate::auth::{self, ApiKeyAuth};
 use crate::error::{ApiError, ApiResult};
@@ -19,7 +19,10 @@ const MAX_TOTAL_SANDBOXES: i64 = 20;
 const MAX_STORAGE_GB: i64 = 50;
 const RATE_LIMIT_PER_MINUTE: i64 = 120;
 
-pub async fn me(State(_state): State<AppState>, auth: Extension<ApiKeyAuth>) -> ApiResult<Json<Account>> {
+pub async fn me(
+    State(_state): State<AppState>,
+    auth: Extension<ApiKeyAuth>,
+) -> ApiResult<Json<Account>> {
     Ok(Json(Account {
         identifier: auth.0.account_id,
         login_state: "active".into(),
@@ -76,7 +79,9 @@ pub async fn create_api_key(
     if auth.is_none() && auth::has_any_key(&state.db).await? {
         return Err(ApiError::unauthorized());
     }
-    let account_id = auth.map(|a| a.account_id).unwrap_or_else(|| "default".to_string());
+    let account_id = auth
+        .map(|a| a.account_id)
+        .unwrap_or_else(|| "default".to_string());
 
     let id = TypedId::api_key().to_string();
     let secret = TypedId::api_key_secret().to_string();

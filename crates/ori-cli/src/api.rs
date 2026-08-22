@@ -22,7 +22,11 @@ impl Api {
         let client = reqwest::Client::builder()
             .build()
             .expect("failed to build reqwest client");
-        Self { base, token, client }
+        Self {
+            base,
+            token,
+            client,
+        }
     }
 
     pub fn base_url(&self) -> &str {
@@ -50,14 +54,13 @@ impl Api {
         if let Some(body) = body {
             req = req.json(body);
         }
-        let res = req
-            .send()
-            .await
-            .map_err(|e| CliError::Api(ApiError {
+        let res = req.send().await.map_err(|e| {
+            CliError::Api(ApiError {
                 status: 0,
                 code: "network".into(),
                 message: e.to_string(),
-            }))?;
+            })
+        })?;
         let status = res.status();
         if !status.is_success() {
             return Err(self.error_from_response(res, status).await);
@@ -78,16 +81,22 @@ impl Api {
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             message = format!("{message}; run `ori login`");
         }
-        CliError::Api(ApiError { status: status.as_u16(), code, message })
+        CliError::Api(ApiError {
+            status: status.as_u16(),
+            code,
+            message,
+        })
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, CliError> {
         let res = self.send(Method::GET, path, None).await?;
-        res.json::<T>().await.map_err(|e| CliError::Api(ApiError {
-            status: 0,
-            code: "bad_response".into(),
-            message: e.to_string(),
-        }))
+        res.json::<T>().await.map_err(|e| {
+            CliError::Api(ApiError {
+                status: 0,
+                code: "bad_response".into(),
+                message: e.to_string(),
+            })
+        })
     }
 
     pub async fn post_json<T: DeserializeOwned>(
@@ -97,11 +106,13 @@ impl Api {
     ) -> Result<T, CliError> {
         let v = serde_json::to_value(body)?;
         let res = self.send(Method::POST, path, Some(&v)).await?;
-        res.json::<T>().await.map_err(|e| CliError::Api(ApiError {
-            status: 0,
-            code: "bad_response".into(),
-            message: e.to_string(),
-        }))
+        res.json::<T>().await.map_err(|e| {
+            CliError::Api(ApiError {
+                status: 0,
+                code: "bad_response".into(),
+                message: e.to_string(),
+            })
+        })
     }
 
     /// `POST` returning the raw response (caller consumes body / streams NDJSON).
@@ -111,7 +122,11 @@ impl Api {
     }
 
     /// `POST` for streaming endpoints (`new` / `resume` / `fork`).
-    pub async fn post_stream(&self, path: &str, body: &impl Serialize) -> Result<Response, CliError> {
+    pub async fn post_stream(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<Response, CliError> {
         self.post(path, body).await
     }
 
@@ -147,8 +162,14 @@ mod tests {
 
     #[test]
     fn normalises_base_to_api_v1() {
-        assert_eq!(normalize_base("https://api.ori.dev"), "https://api.ori.dev/api/v1");
-        assert_eq!(normalize_base("https://api.ori.dev/"), "https://api.ori.dev/api/v1");
+        assert_eq!(
+            normalize_base("https://api.ori.dev"),
+            "https://api.ori.dev/api/v1"
+        );
+        assert_eq!(
+            normalize_base("https://api.ori.dev/"),
+            "https://api.ori.dev/api/v1"
+        );
         assert_eq!(
             normalize_base("https://host.example/api/v1"),
             "https://host.example/api/v1"
@@ -158,7 +179,9 @@ mod tests {
     #[test]
     fn parses_error_bodies() {
         assert_eq!(
-            parse_error_body(r#"{"error":{"code":"provider_unavailable","message":"no capacity"}}"#),
+            parse_error_body(
+                r#"{"error":{"code":"provider_unavailable","message":"no capacity"}}"#
+            ),
             Some(("provider_unavailable".into(), "no capacity".into()))
         );
         assert_eq!(

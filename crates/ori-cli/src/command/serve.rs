@@ -27,5 +27,7 @@ pub async fn serve(args: ServeArgs, _ctx: &Ctx) -> Result<(), CliError> {
     // run() returns on shutdown or a fatal startup error (bind failure,
     // provider preflight failure, missing ORI_PVE_* config). Surface it as a
     // local error so the exit code is 1 and the message is on stderr.
-    ori_server::run(cfg).await.map_err(|e| CliError::usage(format!("serve: {e}")))
+    ori_server::run(cfg)
+        .await
+        .map_err(|e| CliError::usage(format!("serve: {e}")))
 }

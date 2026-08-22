@@ -26,7 +26,11 @@ impl std::error::Error for ApiError {}
 
 impl From<reqwest::Error> for CliError {
     fn from(e: reqwest::Error) -> Self {
-        CliError::Api(ApiError { status: 0, code: "network".into(), message: e.to_string() })
+        CliError::Api(ApiError {
+            status: 0,
+            code: "network".into(),
+            message: e.to_string(),
+        })
     }
 }
 
@@ -73,7 +77,11 @@ mod tests {
     fn exit_code_mapping() {
         assert_eq!(exit_code(&CliError::Usage("x".into())), 1);
         assert_eq!(
-            exit_code(&CliError::Api(ApiError { status: 500, code: "boom".into(), message: "m".into() })),
+            exit_code(&CliError::Api(ApiError {
+                status: 500,
+                code: "boom".into(),
+                message: "m".into()
+            })),
             2
         );
         assert_eq!(exit_code(&CliError::Unimplemented { command: "serve" }), 1);

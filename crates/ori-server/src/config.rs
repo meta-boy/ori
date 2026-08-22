@@ -6,17 +6,12 @@ use std::str::FromStr;
 use std::time::Duration;
 
 /// Which sandbox backend the control plane drives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProviderKind {
+    #[default]
     Mock,
     Proxmox,
     Docker,
-}
-
-impl Default for ProviderKind {
-    fn default() -> Self {
-        ProviderKind::Mock
-    }
 }
 
 impl FromStr for ProviderKind {
@@ -26,7 +21,9 @@ impl FromStr for ProviderKind {
             "mock" => Ok(ProviderKind::Mock),
             "proxmox" => Ok(ProviderKind::Proxmox),
             "docker" => Ok(ProviderKind::Docker),
-            other => Err(format!("unknown provider {other:?}; expected mock|proxmox|docker")),
+            other => Err(format!(
+                "unknown provider {other:?}; expected mock|proxmox|docker"
+            )),
         }
     }
 }
@@ -115,8 +112,14 @@ mod tests {
     #[test]
     fn provider_kinds_parse() {
         assert_eq!("mock".parse::<ProviderKind>().unwrap(), ProviderKind::Mock);
-        assert_eq!("proxmox".parse::<ProviderKind>().unwrap(), ProviderKind::Proxmox);
-        assert_eq!("docker".parse::<ProviderKind>().unwrap(), ProviderKind::Docker);
+        assert_eq!(
+            "proxmox".parse::<ProviderKind>().unwrap(),
+            ProviderKind::Proxmox
+        );
+        assert_eq!(
+            "docker".parse::<ProviderKind>().unwrap(),
+            ProviderKind::Docker
+        );
         assert!("firecracker".parse::<ProviderKind>().is_err());
     }
 }

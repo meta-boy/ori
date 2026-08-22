@@ -131,7 +131,9 @@ pub async fn insert_sandbox(db: &SqlitePool, s: &NewSandbox) -> Result<(), sqlx:
 }
 
 pub fn is_unique_violation(e: &sqlx::Error) -> bool {
-    e.as_database_error().map(|d| d.is_unique_violation()).unwrap_or(false)
+    e.as_database_error()
+        .map(|d| d.is_unique_violation())
+        .unwrap_or(false)
 }
 
 fn slugify_type(m: &MachineType) -> &'static str {
@@ -173,12 +175,7 @@ pub async fn get_sandbox_including_deleted(
 /// Guarded transition: only succeeds if the row is currently in one of `from`.
 /// Returns false if the row moved under us (another reaper/request got there
 /// first). This is what makes stop-on-stopping idempotent and restart-safe.
-pub async fn transition(
-    db: &SqlitePool,
-    id: &str,
-    from: &[&str],
-    to: BoxState,
-) -> ApiResult<bool> {
+pub async fn transition(db: &SqlitePool, id: &str, from: &[&str], to: BoxState) -> ApiResult<bool> {
     if from.is_empty() {
         return Ok(false);
     }
@@ -261,13 +258,15 @@ pub async fn set_setup_status(
     status: &str,
     error: Option<&str>,
 ) -> ApiResult<()> {
-    sqlx::query("UPDATE sandboxes SET setup_status = ?, setup_error = ?, updated_at = ? WHERE id = ?")
-        .bind(status)
-        .bind(error)
-        .bind(now_ts())
-        .bind(id)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "UPDATE sandboxes SET setup_status = ?, setup_error = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(status)
+    .bind(error)
+    .bind(now_ts())
+    .bind(id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -306,7 +305,11 @@ pub async fn list_sandboxes(
     for s in states {
         qb = qb.bind(s);
     }
-    let rows = qb.bind(limit as i64 + 1).bind(offset as i64).fetch_all(db).await?;
+    let rows = qb
+        .bind(limit as i64 + 1)
+        .bind(offset as i64)
+        .fetch_all(db)
+        .await?;
     let has_more = rows.len() > limit as usize;
     let rows = rows.into_iter().take(limit as usize).collect();
     Ok((rows, has_more))
@@ -328,10 +331,7 @@ pub async fn counts(db: &SqlitePool, account_id: &str) -> ApiResult<(i64, i64)> 
 }
 
 /// Every non-deleted sandbox in a set of states.
-pub async fn sandboxes_in_states(
-    db: &SqlitePool,
-    states: &[&str],
-) -> ApiResult<Vec<SandboxRow>> {
+pub async fn sandboxes_in_states(db: &SqlitePool, states: &[&str]) -> ApiResult<Vec<SandboxRow>> {
     let placeholders = vec!["?"; states.len()].join(",");
     let q = format!(
         "SELECT {SAND_COLUMNS} FROM sandboxes WHERE deleted_at IS NULL AND state IN ({placeholders})"

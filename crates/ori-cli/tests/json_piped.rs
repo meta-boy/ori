@@ -4,8 +4,16 @@
 use std::process::Command;
 
 fn run(args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_ori")).args(args).output().unwrap();
-    assert!(out.status.success(), "exit {:?}: {}", out.status.code(), String::from_utf8_lossy(&out.stderr));
+    let out = Command::new(env!("CARGO_BIN_EXE_ori"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "exit {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8(out.stdout).unwrap()
 }
 

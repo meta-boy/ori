@@ -12,7 +12,10 @@ use std::path::PathBuf;
 /// Agent entrypoint. Blocks until the agent is told to stop.
 pub fn run(config: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     match config {
-        Some(p) => println!("ori agent: guest agent starting with config {}", p.display()),
+        Some(p) => println!(
+            "ori agent: guest agent starting with config {}",
+            p.display()
+        ),
         None => println!("ori agent: guest agent starting (no config)"),
     }
     // C6: connect out to the control plane and serve exec/port-host/file ops.

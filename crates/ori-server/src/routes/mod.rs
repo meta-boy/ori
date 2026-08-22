@@ -28,13 +28,25 @@ pub fn router(state: AppState) -> Router {
             get(sandboxes::get_sandbox).delete(sandboxes::delete_sandbox),
         )
         .route("/api/v1/sandboxes/:id/stop", post(sandboxes::stop_sandbox))
-        .route("/api/v1/sandboxes/:id/resume", post(sandboxes::resume_sandbox))
+        .route(
+            "/api/v1/sandboxes/:id/resume",
+            post(sandboxes::resume_sandbox),
+        )
         .route("/api/v1/sandboxes/:id/fork", post(sandboxes::fork_sandbox))
-        .route("/api/v1/sandboxes/:id/extend", post(sandboxes::extend_sandbox))
+        .route(
+            "/api/v1/sandboxes/:id/extend",
+            post(sandboxes::extend_sandbox),
+        )
         .route("/api/v1/sandboxes/:id/exec", post(sandboxes::exec_sandbox))
-        .route("/api/v1/sandboxes/:id/exec/:pid", get(sandboxes::exec_status))
+        .route(
+            "/api/v1/sandboxes/:id/exec/:pid",
+            get(sandboxes::exec_status),
+        )
         .route("/api/v1/sandboxes/:id/prompt", post(ai::prompt_sandbox))
-        .route("/api/v1/sandboxes/:id/interrupt", post(ai::interrupt_sandbox))
+        .route(
+            "/api/v1/sandboxes/:id/interrupt",
+            post(ai::interrupt_sandbox),
+        )
         .route("/api/v1/sandboxes/:id/events", get(ai::events_sandbox))
         .route("/api/v1/operations/:id", get(operations::get_operation))
         .route("/api/v1/me", get(account::me))
@@ -42,7 +54,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/teams", get(account::teams))
         .route("/api/v1/api-keys", get(account::list_api_keys))
         .route("/api/v1/api-keys/:id/revoke", post(account::revoke_api_key))
-        .layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
 
     Router::new()
         .route("/api/v1/cli/login/start", post(login::login_start))

@@ -35,7 +35,9 @@ pub fn hash_secret(secret: &str) -> ApiResult<String> {
 /// Constant-time-ish verify of a presented secret against a stored PHC hash.
 pub fn verify_secret(secret: &str, phc: &str) -> bool {
     match PasswordHash::new(phc) {
-        Ok(parsed) => Argon2::default().verify_password(secret.as_bytes(), &parsed).is_ok(),
+        Ok(parsed) => Argon2::default()
+            .verify_password(secret.as_bytes(), &parsed)
+            .is_ok(),
         Err(_) => false,
     }
 }
@@ -44,11 +46,10 @@ pub fn verify_secret(secret: &str, phc: &str) -> bool {
 /// salted, so we cannot index on it; we verify against each active key. Fine
 /// at single-account scale; revisit with a keyed fingerprint if keys grow.
 pub async fn authenticate(db: &SqlitePool, token: &str) -> ApiResult<ApiKeyAuth> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, account_id, key_hash FROM api_keys WHERE revoked_at IS NULL",
-    )
-    .fetch_all(db)
-    .await?;
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id, account_id, key_hash FROM api_keys WHERE revoked_at IS NULL")
+            .fetch_all(db)
+            .await?;
     for (key_id, account_id, hash) in rows {
         if verify_secret(token, &hash) {
             return Ok(ApiKeyAuth { account_id, key_id });

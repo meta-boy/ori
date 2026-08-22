@@ -5,9 +5,9 @@
 //! `quota_exceeded`, `rate_limited`, `provider_unavailable`,
 //! `invalid_request`, `not_implemented`.
 
-use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde_json::json;
 
 #[derive(Debug, Clone)]
@@ -19,21 +19,39 @@ pub struct ApiError {
 
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}: {}", self.status.as_u16(), self.code, self.message)
+        write!(
+            f,
+            "{} {}: {}",
+            self.status.as_u16(),
+            self.code,
+            self.message
+        )
     }
 }
 
 impl ApiError {
     pub fn invalid_request(msg: impl Into<String>) -> Self {
-        ApiError { status: StatusCode::BAD_REQUEST, code: "invalid_request", message: msg.into() }
+        ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_request",
+            message: msg.into(),
+        }
     }
 
     pub fn not_found(what: impl Into<String>) -> Self {
-        ApiError { status: StatusCode::NOT_FOUND, code: "not_found", message: what.into() }
+        ApiError {
+            status: StatusCode::NOT_FOUND,
+            code: "not_found",
+            message: what.into(),
+        }
     }
 
     pub fn conflict(msg: impl Into<String>) -> Self {
-        ApiError { status: StatusCode::CONFLICT, code: "conflict", message: msg.into() }
+        ApiError {
+            status: StatusCode::CONFLICT,
+            code: "conflict",
+            message: msg.into(),
+        }
     }
 
     pub fn invalid_transition(from: &str, to: &str) -> Self {
@@ -53,7 +71,11 @@ impl ApiError {
     }
 
     pub fn quota_exceeded(msg: impl Into<String>) -> Self {
-        ApiError { status: StatusCode::TOO_MANY_REQUESTS, code: "quota_exceeded", message: msg.into() }
+        ApiError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "quota_exceeded",
+            message: msg.into(),
+        }
     }
 
     pub fn provider_unavailable(msg: impl Into<String>) -> Self {

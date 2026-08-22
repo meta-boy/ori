@@ -68,26 +68,57 @@ impl ProxmoxAdapter {
         db: SqlitePool,
         vmid_min: i64,
     ) -> Self {
-        ProxmoxAdapter { inner, db, vmid_min: vmid_min.max(100) }
+        ProxmoxAdapter {
+            inner,
+            db,
+            vmid_min: vmid_min.max(100),
+        }
     }
 
-    /// Monotonic VMID from `vmid_allocations`; the primary key is the arbiter
-    /// under concurrency, so a retry loop around a unique violation is the
-    /// whole allocation protocol. VMIDs are never reused.
+    /// Monotonic VMID from `vmid_allocations`, cross-checked against the live
+    /// node: the counter is the starting point, the node's existing VMID list
+    /// is the arbiter for what is actually free. A colliding id is burned in
+    /// the DB so it is never retried.
     async fn allocate_vmid(&self) -> Result<u32, proto::ProviderError> {
-        for _ in 0..200 {
-            let row: (Option<i64>,) = sqlx::query_as(
-                "SELECT MAX(vmid) FROM vmid_allocations WHERE provider = 'proxmox'",
-            )
-            .fetch_one(&self.db)
+        let existing: std::collections::HashSet<u32> = self
+            .inner
+            .client()
+            .lxc_vmids()
             .await
-            .map_err(|e| proto::ProviderError::Failed(format!("vmid allocation: {e}")))?;
-            let mut next = (row.0.unwrap_or(self.vmid_min - 1) + 1).max(self.vmid_min);
+            .map_err(|e| proto::ProviderError::Failed(format!("cannot list node vmids: {e}")))?
+            .into_iter()
+            .collect();
+        let nextid = self
+            .inner
+            .client()
+            .nextid()
+            .await
+            .unwrap_or(self.vmid_min as u32);
+        for _ in 0..200 {
+            let row: (Option<i64>,) =
+                sqlx::query_as("SELECT MAX(vmid) FROM vmid_allocations WHERE provider = 'proxmox'")
+                    .fetch_one(&self.db)
+                    .await
+                    .map_err(|e| proto::ProviderError::Failed(format!("vmid allocation: {e}")))?;
+            let mut next = (row.0.unwrap_or(self.vmid_min - 1) + 1)
+                .max(self.vmid_min)
+                .max(nextid as i64);
             if (TEST_VMID_MIN..=TEST_VMID_MAX).contains(&next) {
                 next = TEST_VMID_MAX + 1;
             }
             let vmid = u32::try_from(next)
                 .map_err(|_| proto::ProviderError::Failed("vmid counter overflow".into()))?;
+            if existing.contains(&vmid) {
+                let _ = sqlx::query(
+                    "INSERT OR IGNORE INTO vmid_allocations (vmid, provider, account_id, sandbox_id, created_at) \
+                     VALUES (?, 'proxmox', 'default', NULL, ?)",
+                )
+                .bind(vmid)
+                .bind(crate::util::now_ts())
+                .execute(&self.db)
+                .await;
+                continue;
+            }
             let res = sqlx::query(
                 "INSERT INTO vmid_allocations (vmid, provider, account_id, sandbox_id, created_at) \
                  VALUES (?, 'proxmox', 'default', NULL, ?)",
@@ -100,11 +131,15 @@ impl ProxmoxAdapter {
                 Ok(_) => return Ok(vmid),
                 Err(e) if crate::repo::is_unique_violation(&e) => continue,
                 Err(e) => {
-                    return Err(proto::ProviderError::Failed(format!("vmid allocation: {e}")));
+                    return Err(proto::ProviderError::Failed(format!(
+                        "vmid allocation: {e}"
+                    )));
                 }
             }
         }
-        Err(proto::ProviderError::Failed("could not allocate a free vmid".into()))
+        Err(proto::ProviderError::Failed(
+            "could not allocate a free vmid".into(),
+        ))
     }
 
     fn to_spec(
@@ -126,7 +161,10 @@ impl ProxmoxAdapter {
     }
 
     fn to_handle(h: &proto::InstanceHandle) -> ori_providers::reconcile::InstanceHandle {
-        ori_providers::reconcile::InstanceHandle { provider: h.provider.clone(), id: h.id.clone() }
+        ori_providers::reconcile::InstanceHandle {
+            provider: h.provider.clone(),
+            id: h.id.clone(),
+        }
     }
 
     /// The server's `SnapshotRef` only carries `name`; Proxmox snapshot refs
@@ -143,14 +181,21 @@ impl ProxmoxAdapter {
     }
 
     fn from_snapshot_ref(s: ori_providers::reconcile::SnapshotRef) -> proto::SnapshotRef {
-        proto::SnapshotRef { provider: s.provider, name: s.id }
+        proto::SnapshotRef {
+            provider: s.provider,
+            name: s.id,
+        }
     }
 
     fn to_exec_req(req: &proto::ExecRequest) -> ori_providers::reconcile::ExecRequest {
         ori_providers::reconcile::ExecRequest {
             command: req.cmd.clone(),
             timeout: req.timeout_secs.map(Duration::from_secs),
-            env: req.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            env: req
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             workdir: req.cwd.clone(),
         }
     }
@@ -167,8 +212,14 @@ impl ProxmoxAdapter {
     }
 
     fn from_addresses(a: ori_providers::reconcile::Addresses) -> proto::Addresses {
-        let ip = a.v4.first().or_else(|| a.v6.first()).map(|ip| ip.to_string());
-        proto::Addresses { ip, desktop_url: None }
+        let ip =
+            a.v4.first()
+                .or_else(|| a.v6.first())
+                .map(|ip| ip.to_string());
+        proto::Addresses {
+            ip,
+            desktop_url: None,
+        }
     }
 }
 
@@ -178,14 +229,6 @@ fn machine_to(m: proto::MachineType) -> ori_providers::reconcile::MachineType {
         proto::MachineType::Small => R::Small,
         proto::MachineType::Default => R::Default,
         proto::MachineType::Large => R::Large,
-    }
-}
-
-fn machine_from(m: ori_providers::reconcile::MachineType) -> proto::MachineType {
-    match m {
-        ori_providers::reconcile::MachineType::Small => proto::MachineType::Small,
-        ori_providers::reconcile::MachineType::Default => proto::MachineType::Default,
-        ori_providers::reconcile::MachineType::Large => proto::MachineType::Large,
     }
 }
 
@@ -214,9 +257,10 @@ fn map_err(e: ori_providers::Error) -> proto::ProviderError {
         R::QuotaExceeded(m) | R::InvalidTransition(m) | R::InvalidRequest(m) => {
             proto::ProviderError::Failed(m)
         }
-        R::ProviderNotImplemented { provider, operation } => {
-            proto::ProviderError::Failed(format!("{provider} has not implemented {operation}"))
-        }
+        R::ProviderNotImplemented {
+            provider,
+            operation,
+        } => proto::ProviderError::Failed(format!("{provider} has not implemented {operation}")),
         R::RateLimited(m) | R::ProviderUnavailable(m) | R::Other(m) => {
             proto::ProviderError::Unavailable(m)
         }
@@ -253,7 +297,10 @@ impl Provider for ProxmoxAdapter {
         let vmid = self.allocate_vmid().await?;
         let rspec = self.to_spec(spec, vmid);
         let h = self.inner.create(&rspec).await.map_err(map_err)?;
-        Ok(proto::InstanceHandle { provider: h.provider, id: h.id })
+        Ok(proto::InstanceHandle {
+            provider: h.provider,
+            id: h.id,
+        })
     }
 
     async fn clone_from(
@@ -264,8 +311,15 @@ impl Provider for ProxmoxAdapter {
         let vmid = self.allocate_vmid().await?;
         let rspec = self.to_spec(spec, vmid);
         let rsrc = Self::to_snapshot_ref(src);
-        let h = self.inner.clone_from(&rsrc, &rspec).await.map_err(map_err)?;
-        Ok(proto::InstanceHandle { provider: h.provider, id: h.id })
+        let h = self
+            .inner
+            .clone_from(&rsrc, &rspec)
+            .await
+            .map_err(map_err)?;
+        Ok(proto::InstanceHandle {
+            provider: h.provider,
+            id: h.id,
+        })
     }
 
     async fn start(&self, h: &proto::InstanceHandle) -> Result<(), proto::ProviderError> {
@@ -277,15 +331,28 @@ impl Provider for ProxmoxAdapter {
         h: &proto::InstanceHandle,
         mode: proto::StopMode,
     ) -> Result<(), proto::ProviderError> {
-        self.inner.stop(&Self::to_handle(h), stop_mode_to(mode)).await.map_err(map_err)
+        self.inner
+            .stop(&Self::to_handle(h), stop_mode_to(mode))
+            .await
+            .map_err(map_err)
     }
 
     async fn destroy(&self, h: &proto::InstanceHandle) -> Result<(), proto::ProviderError> {
-        self.inner.destroy(&Self::to_handle(h)).await.map_err(map_err)
+        self.inner
+            .destroy(&Self::to_handle(h))
+            .await
+            .map_err(map_err)
     }
 
-    async fn status(&self, h: &proto::InstanceHandle) -> Result<proto::InstanceStatus, proto::ProviderError> {
-        self.inner.status(&Self::to_handle(h)).await.map(status_from).map_err(map_err)
+    async fn status(
+        &self,
+        h: &proto::InstanceHandle,
+    ) -> Result<proto::InstanceStatus, proto::ProviderError> {
+        self.inner
+            .status(&Self::to_handle(h))
+            .await
+            .map(status_from)
+            .map_err(map_err)
     }
 
     async fn snapshot(
@@ -293,7 +360,11 @@ impl Provider for ProxmoxAdapter {
         h: &proto::InstanceHandle,
         name: &str,
     ) -> Result<proto::SnapshotRef, proto::ProviderError> {
-        let s = self.inner.snapshot(&Self::to_handle(h), name).await.map_err(map_err)?;
+        let s = self
+            .inner
+            .snapshot(&Self::to_handle(h), name)
+            .await
+            .map_err(map_err)?;
         Ok(Self::from_snapshot_ref(s))
     }
 
@@ -309,7 +380,10 @@ impl Provider for ProxmoxAdapter {
     }
 
     async fn snapshot_delete(&self, s: &proto::SnapshotRef) -> Result<(), proto::ProviderError> {
-        self.inner.snapshot_delete(&Self::to_snapshot_ref(s)).await.map_err(map_err)
+        self.inner
+            .snapshot_delete(&Self::to_snapshot_ref(s))
+            .await
+            .map_err(map_err)
     }
 
     async fn exec(
@@ -318,7 +392,11 @@ impl Provider for ProxmoxAdapter {
         req: &proto::ExecRequest,
     ) -> Result<proto::ExecResult, proto::ProviderError> {
         let rreq = Self::to_exec_req(req);
-        let r = self.inner.exec(&Self::to_handle(h), rreq).await.map_err(map_err)?;
+        let r = self
+            .inner
+            .exec(&Self::to_handle(h), rreq)
+            .await
+            .map_err(map_err)?;
         Ok(Self::from_exec_result(r))
     }
 
@@ -327,11 +405,21 @@ impl Provider for ProxmoxAdapter {
         h: &proto::InstanceHandle,
         t: proto::MachineType,
     ) -> Result<(), proto::ProviderError> {
-        self.inner.resize(&Self::to_handle(h), machine_to(t)).await.map_err(map_err)
+        self.inner
+            .resize(&Self::to_handle(h), machine_to(t))
+            .await
+            .map_err(map_err)
     }
 
-    async fn addresses(&self, h: &proto::InstanceHandle) -> Result<proto::Addresses, proto::ProviderError> {
-        let a = self.inner.addresses(&Self::to_handle(h)).await.map_err(map_err)?;
+    async fn addresses(
+        &self,
+        h: &proto::InstanceHandle,
+    ) -> Result<proto::Addresses, proto::ProviderError> {
+        let a = self
+            .inner
+            .addresses(&Self::to_handle(h))
+            .await
+            .map_err(map_err)?;
         Ok(Self::from_addresses(a))
     }
 }

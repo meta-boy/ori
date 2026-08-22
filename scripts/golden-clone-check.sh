@@ -49,7 +49,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TIER=$(pve_get "/api2/json/nodes/$ORI_NODE/lxc" | jq -r --argjson v "$GOLDEN" '.data[]? | select(.vmid == $v) | .ostype')
+TIER=$(pve_get "/api2/json/nodes/$ORI_NODE/lxc/$GOLDEN/config" | jq -r '.data.ostype // empty')
+[ -n "$TIER" ] || TIER=ubuntu
 
 echo
 echo "== clone (linked, full=0, snapname=base) =="
