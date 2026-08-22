@@ -1,0 +1,6 @@
+# Placeholder manifest — owned by C3 (server). Replace freely; do not add source
+# here until you own this crate.
+[package]
+name = "ori-server"
+version.workspace = true
+edition.workspace = true

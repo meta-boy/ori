@@ -1,0 +1,6 @@
+# Placeholder manifest — owned by C2 (CLI). Replace freely; do not add source
+# here until you own this crate.
+[package]
+name = "ori-cli"
+version.workspace = true
+edition.workspace = true

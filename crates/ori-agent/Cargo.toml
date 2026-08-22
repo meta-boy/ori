@@ -1,0 +1,6 @@
+# Placeholder manifest — owned by C6 (agent). Replace freely; do not add source
+# here until you own this crate.
+[package]
+name = "ori-agent"
+version.workspace = true
+edition.workspace = true

@@ -1,0 +1,31 @@
+#!/bin/bash
+# Blocks committing references to the commercial product this project competes
+# with. Research notes live outside the repo, in ~/.ori-research.
+# Fragments are concatenated so this file does not match its own pattern.
+P1='\b'"b"'ox\b'
+P2='\b'"b"'x[-_][a-z]'
+P3='\b'"b"'x_[a-z0-9]{6,}'
+P4='as'"cii\.dev"
+P5='\b'"bd"'op_'
+PATTERN="$P1|$P2|$P3|$P4|$P5"
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+bad=0
+for f in $staged; do
+  [ -f "$f" ] || continue
+  case "$f" in .githooks/pre-commit) continue ;; esac
+  if git show ":$f" 2>/dev/null | grep -nEi "$PATTERN" >/dev/null; then
+    echo "pre-commit: forbidden reference in $f" >&2
+    git show ":$f" | grep -nEi "$PATTERN" | head -5 >&2
+    bad=1
+  fi
+done
+if [ $bad -ne 0 ]; then
+  cat >&2 <<'MSG'
+
+Refusing to commit. Rename it, or move the note to ~/.ori-research (outside
+the repo). Override only if certain: git commit --no-verify
+MSG
+  exit 1
+fi
+exit 0

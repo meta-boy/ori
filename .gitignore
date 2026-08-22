@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.db
+*.db-*
+/research/*.tmp
+.env.local
+.env
