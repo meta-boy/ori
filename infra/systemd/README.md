@@ -23,8 +23,8 @@ sudo install -d -o ori -g ori /var/lib/ori
 sudo install -m 0644 infra/systemd/ori-serve.service /etc/systemd/system/
 # secrets + provider config
 sudo install -d /etc/ori
-sudo install -m 600 /dev/null /etc/ori/serve.env      # fill in, root only
-sudo install -m 600 /etc/ori/serve.env /etc/ori/serve.env
+sudo touch /etc/ori/serve.env            # fill in the Proxmox token, api keys
+sudo chmod 600 /etc/ori/serve.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now ori-serve
 sudo systemctl status ori-serve
