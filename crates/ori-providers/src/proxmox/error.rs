@@ -34,9 +34,7 @@ pub enum PveError {
     NodeMissing { node: String },
     #[error("node {node} is not online (status {status:?})")]
     NodeNotOnline { node: String, status: String },
-    #[error(
-        "storage {storage} cannot snapshot (type {kind:?}); use LVM-thin or ZFS, not dir"
-    )]
+    #[error("storage {storage} cannot snapshot (type {kind:?}); use LVM-thin or ZFS, not dir")]
     StorageNotSnapshotCapable { storage: String, kind: String },
     #[error("storage {storage} not found on node {node}")]
     StorageMissing { node: String, storage: String },

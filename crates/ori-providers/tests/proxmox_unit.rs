@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use wiremock::matchers::{method, path, path_regex};
-use wiremock::{Mock, MockServer, Request, ResponseTemplate, Respond};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use ori_providers::proxmox::ProxmoxConfig;
 use ori_providers::reconcile::{
@@ -283,7 +283,11 @@ async fn clone_sends_full_0_with_snapname() {
 
     assert_eq!(handle.id, "sandbox/9002");
 
-    let body = body.lock().unwrap().clone().expect("clone request recorded");
+    let body = body
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("clone request recorded");
     assert!(
         body.contains("full=0"),
         "clone must be a linked clone, request body: {body}"
@@ -402,7 +406,10 @@ async fn capabilities_are_declared_honestly() {
     assert_eq!(provider.name(), "proxmox");
     assert!(caps.linked_clone);
     assert!(caps.fs_snapshot);
-    assert!(!caps.live_suspend, "CRIU is measured failing; must not claim it");
+    assert!(
+        !caps.live_suspend,
+        "CRIU is measured failing; must not claim it"
+    );
     assert!(caps.nested_containers);
     assert!(!caps.resize_online);
 }

@@ -175,7 +175,10 @@ pub enum Error {
     #[error("invalid transition: {0}")]
     InvalidTransition(String),
     #[error("provider {provider} has not implemented {operation}")]
-    ProviderNotImplemented { provider: &'static str, operation: &'static str },
+    ProviderNotImplemented {
+        provider: &'static str,
+        operation: &'static str,
+    },
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("{0}")]
@@ -197,7 +200,11 @@ pub trait Provider: Send + Sync {
     /// Linked clone from a snapshot. The clone is left **stopped**; the caller
     /// starts it (the warm pool and fork both start explicitly). **Not
     /// idempotent** — a second clone to the same `vmid` conflicts.
-    async fn clone_from(&self, src: &SnapshotRef, spec: &InstanceSpec) -> Result<InstanceHandle, Error>;
+    async fn clone_from(
+        &self,
+        src: &SnapshotRef,
+        spec: &InstanceSpec,
+    ) -> Result<InstanceHandle, Error>;
 
     /// Idempotent: starting an already-running instance is `Ok`.
     async fn start(&self, h: &InstanceHandle) -> Result<(), Error>;

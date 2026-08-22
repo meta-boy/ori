@@ -32,10 +32,9 @@ pub fn parse_handle(h: &InstanceHandle) -> Result<(String, u32), PveError> {
     if h.provider != "proxmox" {
         return Err(PveError::WrongProvider(h.provider.clone()));
     }
-    let (node, vmid) = h
-        .id
-        .split_once('/')
-        .ok_or_else(|| PveError::MalformedHandle(h.id.clone()))?;
+    let (node, vmid) =
+        h.id.split_once('/')
+            .ok_or_else(|| PveError::MalformedHandle(h.id.clone()))?;
     let vmid = vmid
         .parse()
         .map_err(|_| PveError::MalformedHandle(h.id.clone()))?;
@@ -48,7 +47,9 @@ pub fn parse_snapshot_ref(s: &SnapshotRef) -> Result<(String, u32, String), PveE
         return Err(PveError::WrongProvider(s.provider.clone()));
     }
     let mut parts = s.id.splitn(3, '/');
-    let node = parts.next().ok_or_else(|| PveError::MalformedSnapshotRef(s.id.clone()))?;
+    let node = parts
+        .next()
+        .ok_or_else(|| PveError::MalformedSnapshotRef(s.id.clone()))?;
     let vmid = parts
         .next()
         .ok_or_else(|| PveError::MalformedSnapshotRef(s.id.clone()))?

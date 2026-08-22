@@ -21,10 +21,7 @@ pub struct PctExec {
 }
 
 impl PctExec {
-    pub fn new(
-        ssh_target: impl Into<String>,
-        identity_file: Option<std::path::PathBuf>,
-    ) -> Self {
+    pub fn new(ssh_target: impl Into<String>, identity_file: Option<std::path::PathBuf>) -> Self {
         Self {
             ssh_target: ssh_target.into(),
             identity_file,

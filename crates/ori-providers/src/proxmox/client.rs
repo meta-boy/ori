@@ -67,7 +67,11 @@ impl PveClient {
         path: &str,
         form: Option<&[(String, String)]>,
     ) -> Result<String, PveError> {
-        let url = format!("{}/{}", self.base.trim_end_matches('/'), path.trim_start_matches('/'));
+        let url = format!(
+            "{}/{}",
+            self.base.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
         let mut req = self.http.request(method.clone(), &url);
         if let Some(auth) = &self.auth {
             req = req.header("Authorization", auth);
@@ -75,21 +79,15 @@ impl PveClient {
         if let Some(form) = form {
             req = req.form(form);
         }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| PveError::Transport {
-                path: url.clone(),
-                source: e,
-            })?;
+        let resp = req.send().await.map_err(|e| PveError::Transport {
+            path: url.clone(),
+            source: e,
+        })?;
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| PveError::Transport {
-                path: url.clone(),
-                source: e,
-            })?;
+        let text = resp.text().await.map_err(|e| PveError::Transport {
+            path: url.clone(),
+            source: e,
+        })?;
         if !status.is_success() {
             return Err(PveError::from_http(status, &url, text));
         }
@@ -98,16 +96,17 @@ impl PveClient {
 
     /// Parse a successful body's `data` payload into `T`.
     fn parse_data<T: DeserializeOwned>(text: &str, path: &str) -> Result<T, PveError> {
-        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
-            PveError::UnexpectedResponse {
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| PveError::UnexpectedResponse {
                 path: path.to_string(),
                 body: format!("{e}: {text}"),
-            }
-        })?;
-        let data = value.get("data").ok_or_else(|| PveError::UnexpectedResponse {
-            path: path.to_string(),
-            body: text.to_string(),
-        })?;
+            })?;
+        let data = value
+            .get("data")
+            .ok_or_else(|| PveError::UnexpectedResponse {
+                path: path.to_string(),
+                body: text.to_string(),
+            })?;
         serde_json::from_value(data.clone()).map_err(|e| PveError::Data(format!("{path}: {e}")))
     }
 
@@ -151,7 +150,11 @@ impl PveClient {
 
     /// A mutating call returns a UPID. Extract it; the caller must route it
     /// through [`PveClient::wait_task`].
-    pub async fn post_task(&self, path: &str, form: &[(String, String)]) -> Result<String, PveError> {
+    pub async fn post_task(
+        &self,
+        path: &str,
+        form: &[(String, String)],
+    ) -> Result<String, PveError> {
         let text = self.send(Method::POST, path, Some(form)).await?;
         let upid: String = Self::parse_data(&text, path)?;
         if upid.is_empty() || !upid.starts_with("UPID:") {
@@ -255,12 +258,11 @@ impl PveClient {
 
     pub async fn nextid(&self) -> Result<u32, PveError> {
         let text = self.send(Method::GET, "cluster/nextid", None).await?;
-        let envelope: NextId = serde_json::from_str(&text).map_err(|e| {
-            PveError::UnexpectedResponse {
+        let envelope: NextId =
+            serde_json::from_str(&text).map_err(|e| PveError::UnexpectedResponse {
                 path: "cluster/nextid".to_string(),
                 body: format!("{e}: {text}"),
-            }
-        })?;
+            })?;
         envelope
             .data
             .parse()
@@ -310,17 +312,20 @@ impl PveClient {
 
     /// `GET /nodes/{node}/lxc` — VMIDs currently on the node.
     pub async fn lxc_vmids(&self) -> Result<Vec<u32>, PveError> {
-        let text = self.send(Method::GET, &format!("nodes/{}/lxc", self.node), None).await?;
-        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-            PveError::UnexpectedResponse {
+        let text = self
+            .send(Method::GET, &format!("nodes/{}/lxc", self.node), None)
+            .await?;
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| PveError::UnexpectedResponse {
                 path: format!("nodes/{}/lxc", self.node),
                 body: format!("{e}: {text}"),
-            }
-        })?;
-        let data = value.get("data").ok_or_else(|| PveError::UnexpectedResponse {
-            path: format!("nodes/{}/lxc", self.node),
-            body: text.clone(),
-        })?;
+            })?;
+        let data = value
+            .get("data")
+            .ok_or_else(|| PveError::UnexpectedResponse {
+                path: format!("nodes/{}/lxc", self.node),
+                body: text.clone(),
+            })?;
         let arr = data
             .as_array()
             .ok_or_else(|| PveError::UnexpectedResponse {
@@ -343,7 +348,11 @@ impl PveClient {
     }
 
     /// `POST /nodes/{node}/lxc/{vmid}/clone` → UPID.
-    pub async fn clone_lxc(&self, vmid: u32, form: &[(String, String)]) -> Result<String, PveError> {
+    pub async fn clone_lxc(
+        &self,
+        vmid: u32,
+        form: &[(String, String)],
+    ) -> Result<String, PveError> {
         let path = format!("nodes/{}/lxc/{vmid}/clone", self.node);
         self.post_task(&path, form).await
     }
@@ -390,12 +399,7 @@ impl PveClient {
     }
 
     /// `PUT /nodes/{node}/lxc/{vmid}/config` — synchronous, no UPID.
-    pub async fn resize_lxc(
-        &self,
-        vmid: u32,
-        cores: u32,
-        memory_mb: u64,
-    ) -> Result<(), PveError> {
+    pub async fn resize_lxc(&self, vmid: u32, cores: u32, memory_mb: u64) -> Result<(), PveError> {
         let path = format!("nodes/{}/lxc/{vmid}/config", self.node);
         let form = vec![
             ("cores".to_string(), cores.to_string()),

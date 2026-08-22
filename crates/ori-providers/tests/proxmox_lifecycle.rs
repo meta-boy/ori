@@ -31,11 +31,11 @@ fn repo_root() -> PathBuf {
 /// documented "poisoned thin-pool" condition makes a linked clone of a running
 /// source take ~44 s instead of ~2 s. CI runs the strict default.
 fn budget_scale() -> f32 {
-    std::env::var("ORI_PVE_BUDGET_SCALE")
+    let scale: f32 = std::env::var("ORI_PVE_BUDGET_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1.0)
-        .max(1.0)
+        .unwrap_or(1.0);
+    scale.max(1.0)
 }
 
 /// Load `ORI_PVE_*` from `.env.local` (repo root) into the environment, unless
@@ -84,7 +84,10 @@ async fn pick_vmids(provider: &ProxmoxProvider, count: usize) -> Vec<u32> {
         .await
         .expect("list existing vmids");
     let mut free: Vec<u32> = (min..=max).filter(|v| !in_use.contains(v)).collect();
-    assert!(free.len() >= count, "test vmid range {min}..={max} exhausted");
+    assert!(
+        free.len() >= count,
+        "test vmid range {min}..={max} exhausted"
+    );
     free.truncate(count);
     free
 }

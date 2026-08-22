@@ -123,7 +123,9 @@ impl ProxmoxConfig {
             _ => {
                 let combined = env("ORI_PVE_TOKEN")?;
                 let (id, secret) = combined.split_once('=').ok_or_else(|| {
-                    Error::InvalidRequest("ORI_PVE_TOKEN must be user@realm!tokenid=secret".to_string())
+                    Error::InvalidRequest(
+                        "ORI_PVE_TOKEN must be user@realm!tokenid=secret".to_string(),
+                    )
                 })?;
                 (id.to_string(), secret.to_string())
             }
@@ -184,28 +186,31 @@ impl ProxmoxProvider {
             builder = builder.danger_accept_invalid_certs(true);
         }
         if let Some(pem) = &config.ca_pem {
-            let cert = reqwest::Certificate::from_pem(pem.as_bytes()).map_err(|e| {
-                Error::InvalidRequest(format!("invalid ca_pem: {e}"))
-            })?;
+            let cert = reqwest::Certificate::from_pem(pem.as_bytes())
+                .map_err(|e| Error::InvalidRequest(format!("invalid ca_pem: {e}")))?;
             builder = builder.add_root_certificate(cert);
         }
         if let Some(path) = &config.ca_pem_file {
             let pem = std::fs::read(path).map_err(|e| {
                 Error::InvalidRequest(format!("cannot read ca_pem_file {:?}: {e}", path))
             })?;
-            let cert = reqwest::Certificate::from_pem(&pem)
-                .map_err(|e| Error::InvalidRequest(format!("invalid ca_pem_file {:?}: {e}", path)))?;
+            let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| {
+                Error::InvalidRequest(format!("invalid ca_pem_file {:?}: {e}", path))
+            })?;
             builder = builder.add_root_certificate(cert);
         }
 
-        let http = builder.build().map_err(|e| {
-            Error::InvalidRequest(format!("cannot build http client: {e}"))
-        })?;
+        let http = builder
+            .build()
+            .map_err(|e| Error::InvalidRequest(format!("cannot build http client: {e}")))?;
         Self::new_with_client(config, http).await
     }
 
     /// Build without building an HTTP client (tests inject a mock client).
-    pub async fn new_with_client(config: ProxmoxConfig, http: reqwest::Client) -> Result<Self, Error> {
+    pub async fn new_with_client(
+        config: ProxmoxConfig,
+        http: reqwest::Client,
+    ) -> Result<Self, Error> {
         let client = PveClient::new(&config, http);
         let provider = Self { client, config };
         provider.preflight().await.map_err(Self::map_err)?;
@@ -257,15 +262,13 @@ impl ProxmoxProvider {
             }
         }
 
-        let (tpl_storage, _) = self
-            .config
-            .template
-            .split_once(':')
-            .ok_or_else(|| PveError::Config(format!("template {:?} has no storage: prefix", self.config.template)))?;
-        let content = self
-            .client
-            .storage_content(tpl_storage, "vztmpl")
-            .await?;
+        let (tpl_storage, _) = self.config.template.split_once(':').ok_or_else(|| {
+            PveError::Config(format!(
+                "template {:?} has no storage: prefix",
+                self.config.template
+            ))
+        })?;
+        let content = self.client.storage_content(tpl_storage, "vztmpl").await?;
         if !content.iter().any(|c| c.volid == self.config.template) {
             return Err(PveError::TemplateMissing {
                 node: self.client.node.clone(),
@@ -286,26 +289,30 @@ impl ProxmoxProvider {
         if nextid < 100 {
             return Err(PveError::Config(format!("unexpected nextid {nextid}")));
         }
-        let user = self
-            .config
-            .token_id
-            .split('!')
-            .next()
-            .ok_or_else(|| PveError::Config(format!("token_id {:?} has no user part", self.config.token_id)))?;
-        let path = format!("access/permissions?userid={user}");
-        let text = self
-            .client
-            .get_raw_text(&path)
-            .await
-            .map_err(|e| PveError::Config(format!("cannot read permissions for {user}: {e}")))?;
-        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-            PveError::Data(format!("permissions response for {user}: {e}"))
+        let user = self.config.token_id.split('!').next().ok_or_else(|| {
+            PveError::Config(format!(
+                "token_id {:?} has no user part",
+                self.config.token_id
+            ))
         })?;
+        let path = format!("access/permissions?userid={user}");
+        let text =
+            self.client.get_raw_text(&path).await.map_err(|e| {
+                PveError::Config(format!("cannot read permissions for {user}: {e}"))
+            })?;
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| PveError::Data(format!("permissions response for {user}: {e}")))?;
         let data = value.get("data").ok_or_else(|| {
             PveError::Data(format!("permissions response has no data for {user}"))
         })?;
 
-        let required = ["VM.Allocate", "VM.Clone", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.CPU"];
+        let required = [
+            "VM.Allocate",
+            "VM.Clone",
+            "VM.Config.Disk",
+            "VM.Config.Memory",
+            "VM.Config.CPU",
+        ];
         let have: Vec<&str> = data
             .as_object()
             .into_iter()
@@ -314,7 +321,7 @@ impl ProxmoxProvider {
             .map(|k| k.as_str())
             .filter(|k| required.contains(k))
             .collect();
-        if !have.iter().any(|p| *p == "VM.Allocate")
+        if !have.contains(&"VM.Allocate")
             || !have.iter().any(|p| p.starts_with("VM.Config."))
             || !have.contains(&"VM.Clone")
         {
@@ -524,7 +531,9 @@ impl Provider for ProxmoxProvider {
     /// Cold create from the template, then start. Not idempotent: the same
     /// `vmid` twice conflicts.
     async fn create(&self, spec: &InstanceSpec) -> Result<InstanceHandle, Error> {
-        self.ensure_vmid_free(spec.vmid).await.map_err(Self::map_err)?;
+        self.ensure_vmid_free(spec.vmid)
+            .await
+            .map_err(Self::map_err)?;
         let form = vec![
             ("vmid".to_string(), spec.vmid.to_string()),
             ("ostemplate".to_string(), spec.template.clone()),
@@ -541,14 +550,16 @@ impl Provider for ProxmoxProvider {
                 "net0".to_string(),
                 format!("name=eth0,bridge={},ip=dhcp,type=veth", self.config.bridge),
             ),
-            ("rootfs".to_string(), format!("{}:{ROOTFS_SIZE_GB}", spec.storage)),
-            ("description".to_string(), format!("ori instance {}", spec.id)),
+            (
+                "rootfs".to_string(),
+                format!("{}:{ROOTFS_SIZE_GB}", spec.storage),
+            ),
+            (
+                "description".to_string(),
+                format!("ori instance {}", spec.id),
+            ),
         ];
-        let upid = self
-            .client
-            .create_lxc(&form)
-            .await
-            .map_err(Self::map_err)?;
+        let upid = self.client.create_lxc(&form).await.map_err(Self::map_err)?;
         self.client
             .wait_task(&upid, self.task_timeout())
             .await
@@ -564,15 +575,16 @@ impl Provider for ProxmoxProvider {
         src: &SnapshotRef,
         spec: &InstanceSpec,
     ) -> Result<InstanceHandle, Error> {
-        let (src_node, src_vmid, snap_name) =
-            parse_snapshot_ref(src).map_err(Self::map_err)?;
+        let (src_node, src_vmid, snap_name) = parse_snapshot_ref(src).map_err(Self::map_err)?;
         if src_node != self.client.node {
             return Err(Self::map_err(PveError::SnapshotNodeMismatch {
                 id: src.id.clone(),
                 node: self.client.node.clone(),
             }));
         }
-        self.ensure_vmid_free(spec.vmid).await.map_err(Self::map_err)?;
+        self.ensure_vmid_free(spec.vmid)
+            .await
+            .map_err(Self::map_err)?;
         let form = vec![
             ("newid".to_string(), spec.vmid.to_string()),
             // Linked clone on LVM-thin: ~1.7 s and O(1) in disk size. A full
@@ -582,7 +594,10 @@ impl Provider for ProxmoxProvider {
             ("full".to_string(), "0".to_string()),
             ("snapname".to_string(), snap_name),
             ("hostname".to_string(), spec.name.clone()),
-            ("description".to_string(), format!("ori clone of {src_vmid}")),
+            (
+                "description".to_string(),
+                format!("ori clone of {src_vmid}"),
+            ),
         ];
         let upid = self
             .client
@@ -706,6 +721,8 @@ impl Provider for ProxmoxProvider {
 
     async fn addresses(&self, h: &InstanceHandle) -> Result<Addresses, Error> {
         let (_, vmid) = parse_handle(h).map_err(Self::map_err)?;
-        self.addresses_with_deadline(vmid).await.map_err(Self::map_err)
+        self.addresses_with_deadline(vmid)
+            .await
+            .map_err(Self::map_err)
     }
 }
