@@ -303,8 +303,17 @@ unreachable:
 | 6 | Proxmox provider | yes, UPID polling correct | **no** — server hardcoded `MockProvider` |
 | 8 | Warm pool `PoolManager` | yes, 7 tests incl. 50-way concurrency | **no** — `create` never called `claim()` |
 | — | `register_golden()` | yes | **no** — called only from its own tests |
+| — | Guest agent (`ori-agent`) | yes, full exec/detach/host/setup | **no** — server has no tunnel endpoint |
 
-Each piece passed its own tests. The integration was nobody's deliverable.
+Four times. Each piece passed its own tests. The integration was nobody's
+deliverable.
+
+The guest agent is the clearest case: it implements streamed exec with exit-code
+propagation, detach, port registration and secret injection, and it defines the
+full WebSocket frame contract — explicitly "so the control-plane side can
+implement against it." Nothing on the control-plane side does. `ori exec`
+therefore still pays the 2.7 s `pct exec` round trip while the ~1 s path sits
+unreachable.
 
 The cause is how the work was split, not the agents. Cards were scoped to
 directories specifically so parallel agents would not collide — "you own
