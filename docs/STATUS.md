@@ -55,6 +55,29 @@ control plane on the Proxmox provider, created a real container in **8.49 s**,
 and `exec` returned `Linux x86_64` — so the whole chain is genuine, from an
 arm64 macOS client through the control plane into an x86_64 Linux container.
 
+## Distribution — verified
+
+`scripts/build-all.sh` produces all four targets; `install.sh` was run on this
+machine against a `file://` base:
+
+| target | artifact |
+|---|---|
+| aarch64-apple-darwin | 4.7 MB |
+| x86_64-apple-darwin | 5.0 MB |
+| aarch64-unknown-linux-musl | 5.5 MB (static) |
+| x86_64-unknown-linux-musl | 5.9 MB (static) |
+
+`install.sh` detected the platform, verified the sha256 **before** writing,
+installed to `~/.local/bin` without sudo, and on re-run reported "already up to
+date". `latest.json` carries the self-update contract (version, channel,
+per-platform url/sha256/size). Both musl binaries run the agent role inside real
+Alpine containers; the macOS build compiles without the agent and errors clearly
+on `ori agent`.
+
+**Known red:** `cargo fmt --check` (105 files) and
+`cargo clippy --workspace --all-targets -- -D warnings` (pre-existing
+`ori-server` lints). CI gates both correctly, so CI would fail today.
+
 ## Warm pool foundation — verified
 
 `scripts/golden-clone-check.sh --vmid 9501` against the live host:

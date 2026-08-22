@@ -15,6 +15,15 @@
 # agent.rs); the macOS builds compile without it and simply do not offer the
 # subcommand, so only the Linux targets ever carry agent code.
 
+# IMPORTANT — isolated target directories. `cross` mounts one target directory
+# into every container and reuses it across builds. The container's *host*-side
+# artifacts (proc-macros, build scripts) are compiled against the image's own
+# libc, so a binary produced by one image can fail to run inside another (we hit
+# `GLIBC_2.30 not found` in the Debian-based aarch64 image after an Alpine-based
+# x86_64 build wrote its host artifacts into the shared dir). scripts/build-all.sh
+# and CI therefore set a per-target `CARGO_TARGET_DIR` for every build. Do not
+# "simplify" that away.
+
 [build]
 # Nothing here by default; `cross` inherits the workspace Cargo.toml and
 # rust-toolchain.toml ("stable"). The image pins below are the only pins that
@@ -27,6 +36,10 @@ image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.5"
 
 [target.aarch64-unknown-linux-musl]
 image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5"
+
+# On Apple Silicon, the x86_64 image is amd64-only: pre-pull it (and the aarch64
+# image) with `docker pull --platform linux/amd64 …` so Docker runs it under
+# Rosetta emulation. scripts/build-all.sh does this for you.
 
 # The Apple targets are compiled with the host toolchain (cargo + clang from
 # Xcode), not cross. Keeping them out of the image table makes `cross` fall

@@ -1,0 +1,214 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The agent binary is baked into every golden image; fail if it bloats.
+  ORI_AGENT_SIZE_BUDGET_BYTES: 20971520
+
+jobs:
+  # -------------------------------------------------------------------------
+  # gate: fmt, clippy, tests. Clippy denials are not optional (plans/C10).
+  # -------------------------------------------------------------------------
+  check:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+  # -------------------------------------------------------------------------
+  # release matrix: one binary `ori` per target. The Linux targets are musl so
+  # the `agent` role is a static drop-in for any golden image; the macOS builds
+  # compile without the (Linux-gated) agent and simply error on `ori agent`.
+  # Each target builds into its own CARGO_TARGET_DIR (see Cross.toml).
+  # -------------------------------------------------------------------------
+  release:
+    name: build ${{ matrix.target }}
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-14
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target/release-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      # cross runs the aarch64 Linux image under qemu on x86_64 runners.
+      - name: Register qemu (aarch64 Linux only)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Install cross
+        if: contains(matrix.target, 'unknown-linux')
+        run: cargo install cross --locked
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == *unknown-linux* ]]; then
+            cross build --release --locked --target "${{ matrix.target }}" -p ori-cli --bin ori
+          else
+            cargo build --release --locked --target "${{ matrix.target }}" -p ori-cli --bin ori
+          fi
+
+      - name: Enforce agent size budget (Linux only)
+        if: contains(matrix.target, 'unknown-linux')
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/ori"
+          SIZE="$(stat -c%s "$BIN")"
+          echo "agent binary size: $SIZE bytes"
+          if [ "$SIZE" -gt "$ORI_AGENT_SIZE_BUDGET_BYTES" ]; then
+            echo "error: agent binary exceeds budget of $ORI_AGENT_SIZE_BUDGET_BYTES bytes" >&2
+            exit 1
+          fi
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          echo "value=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == \"ori-cli\") | .version')" >> "$GITHUB_OUTPUT"
+
+      - name: Stage tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          STAGE="$(mktemp -d)"
+          cp "${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/ori" "$STAGE/ori"
+          tar -C "$STAGE" -czf "dist/ori-${{ steps.version.outputs.value }}-${{ matrix.target }}.tar.gz" ori
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ori-${{ matrix.target }}
+          path: dist/ori-*.tar.gz
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # package: checksums + the self-update version contract (latest.json)
+  # -------------------------------------------------------------------------
+  package:
+    name: package checksums + manifest
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Determine version
+        id: version
+        run: |
+          echo "value=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == \"ori-cli\") | .version')" >> "$GITHUB_OUTPUT"
+
+      - name: Write sha256sums.txt + latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ori-*.tar.gz > sha256sums.txt
+          VER="${{ steps.version.outputs.value }}"
+          PUB="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -nc \
+            --arg version "$VER" \
+            --arg channel "stable" \
+            --arg publishedAt "$PUB" \
+            --arg aurl "ori-$VER-aarch64-apple-darwin.tar.gz" \
+            --arg asha "$(grep "ori-$VER-aarch64-apple-darwin.tar.gz" sha256sums.txt | awk '{print $1}')" \
+            --argjson asize "$(stat -c%s "ori-$VER-aarch64-apple-darwin.tar.gz")" \
+            --arg xurl "ori-$VER-x86_64-apple-darwin.tar.gz" \
+            --arg xsha "$(grep "ori-$VER-x86_64-apple-darwin.tar.gz" sha256sums.txt | awk '{print $1}')" \
+            --argjson xsize "$(stat -c%s "ori-$VER-x86_64-apple-darwin.tar.gz")" \
+            --arg lurl "ori-$VER-x86_64-unknown-linux-musl.tar.gz" \
+            --arg lsha "$(grep "ori-$VER-x86_64-unknown-linux-musl.tar.gz" sha256sums.txt | awk '{print $1}')" \
+            --argjson lsize "$(stat -c%s "ori-$VER-x86_64-unknown-linux-musl.tar.gz")" \
+            --arg l2url "ori-$VER-aarch64-unknown-linux-musl.tar.gz" \
+            --arg l2sha "$(grep "ori-$VER-aarch64-unknown-linux-musl.tar.gz" sha256sums.txt | awk '{print $1}')" \
+            --argjson l2size "$(stat -c%s "ori-$VER-aarch64-unknown-linux-musl.tar.gz")" \
+            '{ version: $version, channel: $channel, publishedAt: $publishedAt,
+               platforms: {
+                 "aarch64-apple-darwin":       { url: $aurl,  sha256: $asha,  size: $asize  },
+                 "x86_64-apple-darwin":        { url: $xurl,  sha256: $xsha,  size: $xsize  },
+                 "x86_64-unknown-linux-musl":  { url: $lurl,  sha256: $lsha,  size: $lsize  },
+                 "aarch64-unknown-linux-musl": { url: $l2url, sha256: $l2sha, size: $l2size }
+               } }' > latest.json
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # publish: attach to a GitHub release when a v* tag is pushed
+  # -------------------------------------------------------------------------
+  publish:
+    name: publish release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" \
+            --title "ori $TAG" \
+            --generate-notes \
+            dist/ori-*.tar.gz \
+            dist/sha256sums.txt \
+            dist/latest.json \
+            || gh release upload "$TAG" dist/ori-*.tar.gz dist/sha256sums.txt dist/latest.json --clobber
