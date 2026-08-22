@@ -183,7 +183,7 @@ impl ProxmoxProvider {
     pub async fn new_with_client(config: ProxmoxConfig, http: reqwest::Client) -> Result<Self, Error> {
         let client = PveClient::new(&config, http);
         let provider = Self { client, config };
-        provider.preflight().await?;
+        provider.preflight().await.map_err(Self::map_err)?;
         Ok(provider)
     }
 
@@ -285,9 +285,6 @@ impl ProxmoxProvider {
             .flat_map(|perms| perms.as_object().into_iter().flat_map(|p| p.keys()))
             .filter_map(|k| k.as_str())
             .filter(|k| required.contains(k));
-        for priv_ in allowed.by_ref() {
-            have.push(priv_);
-        }
         if !have.iter().any(|p| *p == "VM.Allocate")
             || !have.iter().any(|p| p.starts_with("VM.Config."))
             || !have.contains(&"VM.Clone")

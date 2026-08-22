@@ -132,6 +132,22 @@ pub enum StateGroup {
 }
 
 impl BoxState {
+    /// Every state, in a stable order.
+    pub const ALL: [BoxState; 12] = [
+        BoxState::Init,
+        BoxState::Provisioning,
+        BoxState::Provisioned,
+        BoxState::Cloning,
+        BoxState::Ready,
+        BoxState::Running,
+        BoxState::Idle,
+        BoxState::Stopping,
+        BoxState::Stopped,
+        BoxState::Archiving,
+        BoxState::Archived,
+        BoxState::Error,
+    ];
+
     pub fn group(&self) -> StateGroup {
         match self {
             BoxState::Cloning | BoxState::Ready | BoxState::Running | BoxState::Idle => {
@@ -264,6 +280,18 @@ impl MachineType {
             MachineType::Small => 0.5,
             MachineType::Default => 1.0,
             MachineType::Large => 2.0,
+        }
+    }
+}
+
+impl std::str::FromStr for MachineType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "small" => Ok(MachineType::Small),
+            "default" => Ok(MachineType::Default),
+            "large" => Ok(MachineType::Large),
+            other => Err(format!("unknown machine type: {other}")),
         }
     }
 }

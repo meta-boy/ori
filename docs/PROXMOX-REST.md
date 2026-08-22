@@ -22,7 +22,10 @@ Poll `GET /nodes/{node}/tasks/{upid}/status` until `status == "stopped"`, then
 check `exitstatus == "OK"`. Anything else is a failure, and a non-OK exitstatus
 with HTTP 200 is the shape a bug will take here.
 
-**The UPID must be URL-encoded** in the task path — it contains `:` characters.
+The UPID goes into the task path as-is. It contains `:`, `@` and `!`, all of
+which are legal in a path segment — **verified: both raw and percent-encoded
+forms return HTTP 200**, so no encoding is required (an earlier note here
+claimed otherwise and was wrong).
 
 Observed poll sequence on create: `running/None` → `running/None` → `stopped/OK`.
 
