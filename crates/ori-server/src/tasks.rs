@@ -82,11 +82,11 @@ pub async fn reconcile_once(state: &AppState) -> ApiResult<()> {
         let known: HashSet<String> = db_handles.into_iter().map(|(h,)| h).collect();
         let mock_ids: Vec<String> =
             mock.registry.lock().unwrap().instances.keys().cloned().collect();
-        for mid in mock_ids {
-            let handle = InstanceHandle { provider: "mock".into(), id: format!("mock:{mid}") };
-            if !known.contains(&handle.id) {
+        for id in mock_ids {
+            let handle = InstanceHandle { provider: "mock".into(), id: id.clone() };
+            if !known.contains(&handle.to_string()) {
                 let _ = mock.destroy(&handle).await;
-                tracing::info!(instance = %handle.id, "reconciler destroyed orphan");
+                tracing::info!(instance = %handle, "reconciler destroyed orphan");
             }
         }
     }

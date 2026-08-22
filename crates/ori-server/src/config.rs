@@ -31,10 +31,6 @@ impl Default for Config {
     }
 }
 
-fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
-
 impl Config {
     pub fn from_env() -> Config {
         let mut cfg = Config::default();

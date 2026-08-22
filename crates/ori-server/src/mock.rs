@@ -55,15 +55,16 @@ impl MockProvider {
     }
 
     fn handle_for(&self, seq: u64) -> InstanceHandle {
-        InstanceHandle { provider: "mock".into(), id: format!("mock:{seq}") }
+        InstanceHandle { provider: "mock".into(), id: seq.to_string() }
     }
 
     fn register(&self, seq: u64) {
+        let handle = self.handle_for(seq);
         self.registry
             .lock()
             .unwrap()
             .instances
-            .insert(seq.to_string(), MockInstance { state: InstanceStatus::Running });
+            .insert(handle.id.clone(), MockInstance { state: InstanceStatus::Running });
     }
 
     fn ip_for(&self, seq: u64) -> String {

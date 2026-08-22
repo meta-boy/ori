@@ -1,0 +1,45 @@
+[Unit]
+# ori control plane (`ori serve`).
+#
+# NOTE — reconciliation on startup, not just on the 30 s tick:
+# The provider is the source of truth for whether a container exists; SQLite
+# is the source of truth for intent. While the server is down, state drifts:
+# pool members stop, the host may destroy orphans, snapshots rot. The server
+# MUST run its reconciliation loop once at startup (before serving requests)
+# so that:
+#   - a container Proxmox has and we do not is destroyed (orphan),
+#   - a sandbox we think is `ready` that Proxmox says is stopped goes to
+#     `error`,
+#   - pool slots whose container no longer exists are dropped, not handed out.
+# See docs/ARCHITECTURE.md — "State, not statelessness".
+Description=ori control plane
+Documentation=file:/opt/ori/docs/ARCHITECTURE.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Dedicated system user; run as root only if you must manage LXC directly.
+User=ori
+Group=ori
+# Data dir (SQLite WAL, pool state). Create it and chown to ori:ori.
+WorkingDirectory=/var/lib/ori
+# Secrets for the Proxmox provider and api keys; NOT world-readable.
+EnvironmentFile=-/etc/ori/serve.env
+ExecStart=/usr/local/bin/ori serve --config /etc/ori/serve.toml
+# Durable process; crash-restart with backoff.
+Restart=always
+RestartSec=5
+# Give the reconciliation loop (startup) time to settle before health checks.
+TimeoutStartSec=120
+
+# Hardening (adjust to taste — the server talks HTTPS to Proxmox and SQLite).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ori
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

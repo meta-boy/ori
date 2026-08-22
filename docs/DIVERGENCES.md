@@ -38,3 +38,76 @@ actual common factor is cloning from a snapshot taken while the container was
 running. `rollback` is still slow in its own right (~47 s to become executable)
 and still should not sit on a request path, but it is not the cause of the
 clone penalty.
+
+## Verified integration bugs (found by running the binaries, 2026-08-23)
+
+Each was reproduced against a live `ori-server` with the real `ori` client.
+Ordered by severity. This list is the input to `plans/C11-integration.md`.
+
+### 1. Cold start is impossible — no way to mint the first API key
+`POST /api/v1/api-keys` is registered inside the `protected` router in
+`crates/ori-server/src/routes/mod.rs`, which carries
+`.layer(...auth::require_auth)`. The handler in `routes/account.rs` contains
+first-key bootstrap logic ("no keys yet -> unauthenticated mint"), and its own
+doc comment claims the route "lives outside the auth middleware" — but it does
+not, so that logic is unreachable. Every request returns
+`{"error":{"code":"unauthorized"}}`.
+
+The device-login path is not an escape hatch: `/cli/login/start` works
+unauthenticated, but `/cli/login/{id}/approve` and `/cli/login/poll/{id}` both
+return 401, so a token can never be obtained either. **A freshly deployed
+server cannot be used at all.** Testing had to insert an argon2 key row
+directly into SQLite to proceed.
+
+Fix: move key creation (and the login approve/poll pair) out of the protected
+router, keeping the handler's own bearer check for the non-bootstrap case.
+Add a test that a brand-new database can mint a first key and then authenticate
+with it — the cold-start path needs a regression test, since nothing else
+exercises it.
+
+### 2. `ori list` cannot decode the server's response
+- CLI `crates/ori-cli/src/wire.rs:38` — `#[serde(rename = "memoryGB")]`
+- Server `crates/ori-server/src/proto.rs:369` — `rename_all = "camelCase"`
+  emits `memoryGb`
+
+One letter. The client field is not `Option`, so decoding fails outright and
+`ori list` reports `bad_response: error decoding response body`. `docs/SPEC-API.md`
+specifies `memoryGB`, so the server is wrong.
+
+This is the exact failure mode the shared `ori-proto` crate exists to prevent,
+and the reason `plans/C8` requires asserting field names against the spec
+rather than round-tripping through our own types: both sides round-trip
+perfectly and still disagree.
+
+### 3. NDJSON reports `ready`, but the row ends up `error`
+`ori new` streamed `created → provisioning → cloning → ready` and returned an
+ip, url and slug. The stored row then read `state: "error"` seconds later, with
+nothing logged. The success stream is therefore not trustworthy — something in
+the post-ready path (reconcile loop or a provider status re-check) demotes the
+sandbox without recording a reason.
+
+Whatever the cause, two things are wrong independently: the state changed with
+no diagnostic written, and a terminal `error` state carries no operator-visible
+explanation. Fix the demotion, and make any transition into `error` record why.
+
+### 4. `exec` returns HTTP 404
+`ori exec <id> echo hello` → `HTTP 404 404: Not Found`. Route/verb or path shape
+mismatch between client and server. Verify against `docs/SPEC-API.md`.
+
+### 5. Two binaries, not one
+`cargo build --workspace` produces both `ori` and `ori-server`, and `ori serve`
+in the client is a stub. `docs/ARCHITECTURE.md` specifies **one** binary with
+three roles. Wire `ori serve` to the control plane and `ori agent` to the guest
+agent, and stop shipping a second artifact.
+
+### 6. The Proxmox provider is never wired in
+`ori-server serve` exposes only `--bind`, `--db-path`, `--domain`. There is no
+provider selection, so the server always runs `MockProvider`. The Proxmox
+provider in `ori-providers` — which is implemented, compiles, polls UPIDs
+correctly and handles the loopback-address trap — is unreachable from the
+server. **Nothing has yet created a real container.** This is the single most
+important gap: until it closes, the product is an API with a simulator behind it.
+
+Fix: a `--provider proxmox|docker|mock` flag plus provider config (host, token,
+node, storage, bridge, template) from env, and a startup preflight that fails
+loudly on a non-snapshot-capable storage.

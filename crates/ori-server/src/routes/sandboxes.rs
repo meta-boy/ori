@@ -233,7 +233,7 @@ async fn insert_with_slug(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct ListParams {
+pub struct ListParams {
     #[serde(default = "default_filter")]
     filter: String,
     limit: Option<u32>,

@@ -22,8 +22,9 @@ argon2 = { version = "0.5", features = ["std"] }
 getrandom = "0.3"
 hex = "0.4"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "http2"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

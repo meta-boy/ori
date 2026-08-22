@@ -5,3 +5,4 @@
 /research/*.tmp
 .env.local
 .env
+.DS_Store

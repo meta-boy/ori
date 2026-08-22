@@ -68,16 +68,16 @@ done
 
 if [ "$ok" = "1" ]; then
   vbody=$(pve_get /api2/json/version)
-  if [ "$ORI_HTTP" != "200" ]; then
+  if [ "$(pve_http)" != "200" ]; then
     report FAIL "Proxmox API unreachable at $ORI_PVE_HOST"
     ok=0
   else
     report PASS "Proxmox API reachable: $(printf '%s' "$vbody" | jq -r '.data.release + " (pve-manager " + .data.version + ")"')"
-    nbody=$(pve_get "/api2/json/nodes/$ORI_NODE/status")
-    if printf '%s' "$nbody" | jq -e '.data.status == "online"' >/dev/null 2>&1; then
+    nbody=$(pve_get /api2/json/nodes)
+    if printf '%s' "$nbody" | jq -e --arg n "$ORI_NODE" '.data[]? | select(.node == $n and .status == "online")' >/dev/null 2>&1; then
       report PASS "node $ORI_NODE online"
     else
-      report FAIL "node $ORI_NODE not online: $(printf '%s' "$nbody" | jq -r '.data.status // .')"
+      report FAIL "node $ORI_NODE not online"
       ok=0
     fi
   fi
@@ -90,7 +90,7 @@ fi
 
 echo "== 2. storage ($ORI_STORAGE) =="
 sbody=$(pve_get "/api2/json/nodes/$ORI_NODE/storage/$ORI_STORAGE/status")
-if [ "$ORI_HTTP" != "200" ]; then
+if [ "$(pve_http)" != "200" ]; then
   report FAIL "storage $ORI_STORAGE unknown on $ORI_NODE"
   exit 1
 fi
@@ -182,7 +182,7 @@ create_scratch() { # <vmid> -> 0 ok / 2 exists
     --data-urlencode "ostype=alpine" \
     --data-urlencode "description=ori preflight scratch" \
     --data-urlencode "tags=ori-preflight")
-  if [ "$ORI_HTTP" != "200" ]; then
+  if [ "$(pve_http)" != "200" ]; then
     printf '%s' "$resp" | grep -qi "already exists" && return 2
     echo "error: scratch create failed: $(printf '%s' "$resp" | jq -r '.message // .')" >&2
     return 1
@@ -220,8 +220,10 @@ report PASS "start: vmid $BASE"
 
 echo "== 5a. DHCP on $ORI_BRIDGE =="
 dhcp_ok=0
+ip=""
 for i in $(seq 1 40); do
-  ip=$(pve_ssh "pct exec $BASE -- sh -c 'ip -4 addr show dev eth0 2>/dev/null'" 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}' | head -1 || true)
+  ip=$(pve_ssh "pct exec $BASE -- sh -c 'ip addr show dev eth0 2>/dev/null || ifconfig eth0 2>/dev/null'" 2>/dev/null \
+    | grep -oE 'inet [0-9.]+' | awk '{print $2}' | grep -v '^127\.' | head -1 || true)
   if [ -n "$ip" ]; then
     dhcp_ok=1
     break
@@ -236,8 +238,10 @@ else
 fi
 
 echo "== 5b. CRIU live suspend =="
-SUSPEND_OUT="$(pve_ssh "timeout 45 pct suspend $BASE" 2>&1 || true)"
+set +e
+SUSPEND_OUT="$(pve_ssh "timeout 45 pct suspend $BASE" 2>&1)"
 SUSPEND_RC=$?
+set -e
 if [ "$SUSPEND_RC" = "0" ]; then
   report WARN "pct suspend SUCCEEDED — CRIU live suspend is now available; update Capabilities.live_suspend=true (this kernel measured rc=255)"
   LIVE_SUSPEND=true
@@ -258,7 +262,7 @@ cres=$(pve_post "/api2/json/nodes/$ORI_NODE/lxc/$BASE/clone" \
   --data-urlencode "newid=$CLONE" \
   --data-urlencode "snapname=preflight" \
   --data-urlencode "full=0")
-if [ "$ORI_HTTP" != "200" ]; then
+if [ "$(pve_http)" != "200" ]; then
   report FAIL "clone to $CLONE failed: $(printf '%s' "$cres" | jq -r '.message // .')"
   roundtrip_ok=0
 else

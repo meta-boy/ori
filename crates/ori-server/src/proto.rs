@@ -366,6 +366,7 @@ pub struct Sandbox {
     #[serde(rename = "type")]
     pub machine_type: MachineType,
     pub vcpu: u32,
+    #[serde(rename = "memoryGB")]
     pub memory_gb: u32,
     pub billing_multiplier: f64,
     pub slug: String,

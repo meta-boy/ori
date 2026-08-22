@@ -140,7 +140,7 @@ create_golden() {
     --data-urlencode "ostype=$OST" \
     --data-urlencode "description=$GOLDEN_DESC_PREFIX tier=$TIER template=$TEMPLATE_VOLID" \
     --data-urlencode "tags=$GOLDEN_TAG")
-  if [ "$ORI_HTTP" != "200" ]; then
+  if [ "$(pve_http)" != "200" ]; then
     if printf '%s' "$resp" | grep -qi "already exists"; then
       return 2
     fi
@@ -291,11 +291,19 @@ export LC_ALL=C
 
 echo "== base packages"
 if [ "$ORI_TIER" = "ubuntu" ]; then
-  apt-get update -qq
-  apt-get install -y -qq openssh-server openssh-client git ca-certificates curl docker.io
+  apt-get update -qq >/dev/null 2>&1 || { echo "ERROR: apt-get update failed" >&2; exit 1; }
+  if ! apt-get install -y -qq openssh-server openssh-client git ca-certificates curl docker.io >/tmp/ori-apt-base.log 2>&1; then
+    echo "ERROR: base package install failed" >&2
+    tail -n 40 /tmp/ori-apt-base.log >&2
+    exit 1
+  fi
 else
-  apk update
-  apk add --no-cache openssh openssh-client git curl ca-certificates docker docker-cli
+  apk update >/dev/null 2>&1 || { echo "ERROR: apk update failed" >&2; exit 1; }
+  if ! apk add --no-cache openssh openssh-client git curl ca-certificates docker docker-cli >/tmp/ori-apk-base.log 2>&1; then
+    echo "ERROR: base package install failed" >&2
+    tail -n 40 /tmp/ori-apk-base.log >&2
+    exit 1
+  fi
 fi
 
 echo "== sshd loopback-only"
@@ -323,11 +331,13 @@ fi
 echo "== desktop / VNC (parity for 'ori desktop'; best effort)"
 if [ "$ORI_DESKTOP" = "1" ]; then
   if [ "$ORI_TIER" = "ubuntu" ]; then
-    apt-get install -y -qq --no-install-recommends xfce4 x11vnc \
-      || { echo "WARN: desktop install failed; continuing" >&2; }
+    if ! apt-get install -y -qq --no-install-recommends xfce4 x11vnc >/tmp/ori-apt-desktop.log 2>&1; then
+      echo "WARN: desktop install failed; continuing without it" >&2
+    fi
   else
-    apk add --no-cache xfce4 x11vnc \
-      || { echo "WARN: desktop install failed; continuing" >&2; }
+    if ! apk add --no-cache xfce4 x11vnc >/tmp/ori-apk-desktop.log 2>&1; then
+      echo "WARN: desktop install failed; continuing without it" >&2
+    fi
   fi
 fi
 
@@ -361,6 +371,13 @@ INIT
   fi
 fi
 
+echo "== sshd running now (loopback binding verified at boot too)"
+if [ "$ORI_TIER" = "ubuntu" ]; then
+  systemctl restart ssh >/dev/null 2>&1 || true
+else
+  rc-service sshd restart >/dev/null 2>&1 || true
+fi
+
 echo "== verify installed surface"
 command -v sshd >/dev/null || { echo "ERROR: sshd missing" >&2; exit 1; }
 command -v git  >/dev/null || { echo "ERROR: git missing"  >&2; exit 1; }
@@ -380,9 +397,18 @@ T_PROV="$(date +%s)"
 pve_ssh "pct exec $VMID -- env ORI_TIER=$TIER ORI_DESKTOP=$DESKTOP ORI_AGENT=$AGENT_FLAG sh /tmp/ori-provision.sh"
 mark "provision"
 
-# sanity: sshd is actually listening on loopback only
-pve_ssh "pct exec $VMID -- sh -c 'ss -tln 2>/dev/null | grep -E \"127.0.0.1|::1.*:22\"' || true" \
-  >/dev/null 2>&1 || true
+# sanity: sshd is listening, and only on loopback
+binds=$(pve_ssh "pct exec $VMID -- sh -c 'ss -tln 2>/dev/null || netstat -tln 2>/dev/null' | grep :22" 2>/dev/null || true)
+if [ -n "$binds" ]; then
+  if printf '%s' "$binds" | grep -qE '127\.0\.0\.1|\[::1\]'; then
+    echo "sshd binds loopback only: $(printf '%s' "$binds" | grep -oE '[0-9.:\[\]]+:22' | tr '\n' ' ')"
+  else
+    echo "WARN: sshd listener not obviously loopback-only:" >&2
+    printf '%s\n' "$binds" >&2
+  fi
+else
+  echo "WARN: could not see an sshd :22 listener (verify in the clone proof)" >&2
+fi
 
 # stop -> snapshot base. Clone timings (1.65-1.83 s) are only valid from a
 # stopped, clean golden; snapshotting a running container is not our pool path.
@@ -412,15 +438,13 @@ echo "  desktop     = $([ "$DESKTOP" = 1 ] && echo installed || echo skipped)"
 echo
 echo "timings (wall clock):"
 prev="$T_START"
-prevname="start"
 for entry in "${STEPS[@]}"; do
   ts="${entry%% *}"
   name="${entry#* }"
-  printf '  %-16s %ss\n' "$prevname" "$((ts - prev))"
+  printf '  %-14s %ss\n' "$name" "$((ts - prev))"
   prev="$ts"
-  prevname="$name"
 done
-printf '  %-16s %ss\n' "total" "$(( $(date +%s) - T_START ))"
+printf '  %-14s %ss\n' "total" "$(( $(date +%s) - T_START ))"
 echo
 echo "pool config input:"
 echo "  ORI_GOLDEN_VMID=$VMID"

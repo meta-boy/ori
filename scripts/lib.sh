@@ -64,14 +64,20 @@ read -r -a ORI_SSH_ARGS <<< "${ORI_PVE_SSH}"
 ORI_AUTH="Authorization: PVEAPIToken=${ORI_PVE_TOKEN_ID}=${ORI_PVE_TOKEN_SECRET}"
 
 # pve_curl <method> <path> [curl args...]
-#   echoes the response body; sets $ORI_HTTP to the http status code.
+#   echoes the response body; the http status code is written to $ORI_HTTP_FILE
+#   (read it with pve_http). Callers invoke these inside $() subshells, so the
+#   code must survive via a file, not a variable.
+ORI_HTTP_FILE="${TMPDIR:-/tmp}/ori-pve-http.$$"
+
+pve_http() { cat "$ORI_HTTP_FILE" 2>/dev/null || echo 000; }
+
 pve_curl() {
   local method="$1" path="$2"
   shift 2
   local out
   out=$(curl -sk -sS --max-time "${ORI_PVE_TIMEOUT:-40}" -w $'\n%{http_code}' \
     -X "$method" -H "$ORI_AUTH" "$ORI_PVE_HOST$path" "$@")
-  ORI_HTTP="${out##*$'\n'}"
+  printf '%s' "${out##*$'\n'}" > "$ORI_HTTP_FILE"
   printf '%s' "${out%$'\n'*}"
 }
 
