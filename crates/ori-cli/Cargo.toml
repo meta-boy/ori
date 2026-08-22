@@ -13,7 +13,7 @@ name = "ori"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -21,7 +21,7 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-futures-util = { version = "0.3", features = ["io"] }
+futures-util = { version = "0.3", features = ["std", "io"] }
 directories = "5"
 
 [dev-dependencies]

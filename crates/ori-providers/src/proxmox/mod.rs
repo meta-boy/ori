@@ -277,14 +277,14 @@ impl ProxmoxProvider {
         })?;
 
         let required = ["VM.Allocate", "VM.Clone", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.CPU"];
-        let mut have: Vec<&str> = Vec::new();
-        let mut allowed = data
+        let have: Vec<&str> = data
             .as_object()
             .into_iter()
             .flat_map(|map| map.values())
             .flat_map(|perms| perms.as_object().into_iter().flat_map(|p| p.keys()))
-            .filter_map(|k| k.as_str())
-            .filter(|k| required.contains(k));
+            .map(|k| k.as_str())
+            .filter(|k| required.contains(k))
+            .collect();
         if !have.iter().any(|p| *p == "VM.Allocate")
             || !have.iter().any(|p| p.starts_with("VM.Config."))
             || !have.contains(&"VM.Clone")

@@ -131,7 +131,7 @@ pub struct LoginStartRequest {
     pub email: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginStartResponse {
     pub id: String,

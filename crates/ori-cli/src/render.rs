@@ -36,7 +36,7 @@ pub fn table_string(header: &[String], rows: &[Vec<String>]) -> String {
         }
     }
     let mut out = String::new();
-    let mut push_row = |out: &mut String, cells: &[String]| {
+    let push_row = |out: &mut String, cells: &[String]| {
         for (i, w) in widths.iter().enumerate() {
             if i > 0 {
                 out.push_str("  ");

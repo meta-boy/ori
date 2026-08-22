@@ -25,7 +25,7 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Status(a) => account::status(a, &ctx).await,
         Command::Completions(a) => completions::run(a),
         Command::CompleteSandbox(_) => completions::complete_sandbox(&ctx).await,
-        Command::Debug(a) => debug(a, &ctx).await,
+        Command::Debug(a) => debug(a.cmd, &ctx).await,
 
         Command::Extend(_) => Err(stub::unimplemented("extend")),
         Command::Operation(_) => Err(stub::unimplemented("operation")),

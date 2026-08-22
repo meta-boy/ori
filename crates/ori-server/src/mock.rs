@@ -77,6 +77,10 @@ impl Provider for MockProvider {
         "mock"
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             linked_clone: true,

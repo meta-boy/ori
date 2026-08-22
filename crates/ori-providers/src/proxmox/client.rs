@@ -378,27 +378,3 @@ impl PveClient {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::proxmox::ProxmoxConfig;
-
-    fn test_config(base: &str) -> ProxmoxConfig {
-        ProxmoxConfig {
-            host: base.to_string(),
-            token_id: "user@pam!token".to_string(),
-            token_secret: "secret".to_string(),
-            node: "sandbox".to_string(),
-            storage: "local-lvm".to_string(),
-            template: "local:vztmpl/alpine.tar.xz".to_string(),
-            bridge: "vmbr0".to_string(),
-            ca_pem: None,
-            ca_pem_file: None,
-            insecure_skip_verify: false,
-            ssh: None,
-            ssh_identity_file: None,
-            task_timeout_secs: 60,
-        }
-    }
-}

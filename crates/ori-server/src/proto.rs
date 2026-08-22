@@ -731,6 +731,13 @@ pub trait Provider: Send + Sync {
     fn name(&self) -> &'static str;
     fn capabilities(&self) -> Capabilities;
 
+    /// Downcast hook so the server can reach provider-specific internals
+    /// (e.g. enumerating instances for orphan detection) without leaking
+    /// provider types through the trait.
+    /// TODO(reconcile): the real `ori-proto` trait may model instance
+    /// enumeration explicitly; this keeps the mock honest in the meantime.
+    fn as_any(&self) -> &dyn std::any::Any;
+
     async fn create(&self, spec: &InstanceSpec) -> Result<InstanceHandle, ProviderError>;
     async fn clone_from(&self, src: &SnapshotRef, spec: &InstanceSpec)
         -> Result<InstanceHandle, ProviderError>;

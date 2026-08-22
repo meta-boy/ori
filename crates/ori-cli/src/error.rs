@@ -24,6 +24,12 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+impl From<reqwest::Error> for CliError {
+    fn from(e: reqwest::Error) -> Self {
+        CliError::Api(ApiError { status: 0, code: "network".into(), message: e.to_string() })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     /// Local/usage error — exit 1.

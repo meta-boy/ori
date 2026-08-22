@@ -245,6 +245,16 @@ pub async fn set_stop_after(db: &SqlitePool, id: &str, stop_after: Option<&str>)
     Ok(())
 }
 
+pub async fn set_no_env(db: &SqlitePool, id: &str, no_env: bool) -> ApiResult<()> {
+    sqlx::query("UPDATE sandboxes SET no_env = ?, updated_at = ? WHERE id = ?")
+        .bind(no_env)
+        .bind(now_ts())
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn soft_delete(db: &SqlitePool, id: &str) -> ApiResult<()> {
     sqlx::query("UPDATE sandboxes SET deleted_at = ?, updated_at = ? WHERE id = ?")
         .bind(now_ts())

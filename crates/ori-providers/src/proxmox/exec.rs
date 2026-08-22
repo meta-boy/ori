@@ -97,17 +97,17 @@ impl PctExec {
         cmd.args(&argv)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
 
         let start = tokio::time::Instant::now();
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .map_err(|e| PveError::Exec(format!("cannot spawn ssh: {e}")))?;
 
         let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
             Ok(out) => out.map_err(|e| PveError::Exec(format!("ssh failed: {e}")))?,
             Err(_elapsed) => {
-                let _ = child.kill().await;
                 return Err(PveError::Exec(format!("timed out after {timeout:?}")));
             }
         };

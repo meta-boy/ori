@@ -85,3 +85,52 @@ golden snapshot** — the configuration the pool actually uses.
 `delete` returning in under a second requires it be asynchronous — the
 underlying stop + destroy is ~3.4 s. Return an operation id immediately and do
 the work in the background.
+
+## Root cause: the 45 s clone penalty belongs to the snapshot
+
+Earlier notes blamed `pct rollback`. That was wrong. A controlled four-case
+experiment isolates it exactly — same container, same storage, same `--full 0`
+flag, only the snapshot's origin varies:
+
+| snapshot taken while source was | source state at clone time | clone |
+|---|---|---|
+| **running** | running | **44.92 s** |
+| stopped | stopped | **2.55 s** |
+| **running** | stopped | **44.99 s** |
+| stopped | running | **2.22 s** |
+
+**The penalty is a property of the snapshot, not of the source.** A snapshot
+taken while the container was running is permanently expensive to clone from —
+20×, forever, no matter what state the source is in later. A snapshot taken
+while stopped is cheap to clone from even while the source is running (case 4).
+
+Proxmox reports `create linked clone` in all four cases and names the same base
+volume, so the log gives no hint that anything differs. Only the timing does.
+
+### The rule this produces
+
+**Fork clones from a snapshot that was taken while the container was stopped.**
+
+This composes well with the rest of the design, because `stop` already
+snapshots after powering off — so every stopped sandbox carries a
+fast-clone-able snapshot for free:
+
+| fork source | path | cost |
+|---|---|---|
+| stopped sandbox | clone latest (stopped) snapshot + start | **≈6.5 s ✅** |
+| running sandbox, has a prior stopped snapshot | clone that snapshot + start | **≈6.5 s ✅** |
+| running sandbox, no stopped snapshot | stop, snapshot, clone, restart source | ≈10 s, ~5 s source downtime |
+| naive: snapshot the live source, then clone | — | **≈52 s ✗** |
+
+The honest limitation of the fast path: forking a running sandbox from its
+latest *stopped* snapshot does not include writes made since that stop. That is
+a real semantic difference and must be stated in `ori fork`'s output, not
+hidden.
+
+### Storage choice matters more than tuning
+
+This is an LVM-thin characteristic. **ZFS clones a snapshot of a live dataset in
+O(1)** and would remove the constraint entirely, making fork-from-live fast
+without any stop. If fork-from-live latency matters, ZFS is the storage
+recommendation — not a tuning flag on LVM-thin. Block zeroing was already tested
+and ruled out (see above).
