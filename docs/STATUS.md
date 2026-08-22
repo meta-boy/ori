@@ -9,7 +9,7 @@ LXC containers, confirmed by `pct list` on the host.
 
 | Command | State | Measured |
 |---|---|---|
-| `ori new` | **real** | 9.2 s cold (no pool yet) |
+| `ori new` | **real** | **1.44 s warm-pool hit**, ~9 s cold miss |
 | `ori list` | **real** | |
 | `ori info` | **real** | |
 | `ori exec` | **real** | 2.7 s (via `pct exec`; guest agent will cut this) |
@@ -105,8 +105,9 @@ of these pre-started and claiming one per `ori new`.
 
 ## Known gaps with evidence
 
-- **Warm pool not built.** `new` is 9.2 s cold; a pool claim measured 0.89 s.
-  This is the single biggest latency win available.
+- ~~Warm pool not built~~ **RESOLVED.** The pool fills and `ori new` claims a
+  warm slot in 1.44 s (target 1.5 s, was 9.2 s). Enable with
+  `--pool-depth N --pool-golden <node>/<vmid>/<snapname>`.
 - **`exec` goes over SSH per call.** 2.7 s vs a 0.90 s `pct exec` floor; the
   guest agent's persistent tunnel removes the per-call handshake.
 - **~1,200 lines of duplicated wire types** across `ori-server/src/proto.rs` and

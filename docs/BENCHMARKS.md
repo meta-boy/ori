@@ -148,7 +148,8 @@ DHCP addresses, verified by `pct list` on the host.
 
 | Operation | Target | Achieved | Notes |
 |---|---|---|---|
-| `new` (cold, no pool) | <=7 s | **9.2 - 9.5 s** | over target; warm pool not built yet |
+| `new` (**warm pool hit**) | <=1.5 s | **1.44 - 1.50 s** PASS | claims a pre-started container |
+| `new` (cold, pool miss) | <=7 s | 8.8 - 9.5 s | template create + start + DHCP |
 | `exec` | <=1 s | 2.7 s | over target; uses `pct exec`, not the guest agent |
 | `stop` (snapshot + off) | <=5 s | **4.7 s** PASS | real snapshots confirmed on the host |
 | `resume` | <=4.5 s | **5.4 s** | close; marker file survived |
@@ -164,10 +165,15 @@ Verified semantics, not just timings:
 
 The two misses are both explained and both have a known fix:
 
-**`new` at 9.2 s vs the 7 s target.** This is the cold path - create from
-template, start, wait for DHCP. The warm pool (`plans/C5`) closes it: claiming a
-pre-started container measured 0.89 s. Until the pool exists every create pays
-full cold cost. The target is not wrong; the pool is missing.
+**`new`: closed.** The warm pool now fills and `ori new` claims a pre-started
+container in **1.44-1.50 s**, against the <=1.5 s target and down from 9.2 s
+cold - a 6x improvement. Verified end to end against the real host with
+`--pool-depth 2 --pool-golden sandbox/9501/base`: the pool filled to depth, the
+event stream showed `provisioning -> ready` with no `cloning` (the pool-hit
+signature), and `exec` into the claimed sandbox returned a real container.
+
+The cold path remains ~9 s and is what a pool miss costs; the miss emits
+`cloning` so it is visible rather than merely slow.
 
 **`exec` at 2.7 s vs the 0.90 s floor.** Exec shells out through `pct exec` over
 SSH instead of the guest agent (`plans/C6`, unimplemented). `pct exec` alone
