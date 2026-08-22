@@ -153,7 +153,8 @@ DHCP addresses, verified by `pct list` on the host.
 | `exec` | <=1 s | 2.7 s | over target; uses `pct exec`, not the guest agent |
 | `stop` (snapshot + off) | <=5 s | **4.7 s** PASS | real snapshots confirmed on the host |
 | `resume` | <=4.5 s | **5.4 s** | close; marker file survived |
-| `fork` | <=7 s | **9.1 s** | **not 51 s** - the stopped-snapshot rule works |
+| `fork` (source **stopped**) | <=7 s | **8.7 - 9.1 s** | clones the snapshot `stop` already took |
+| `fork` (source **running**) | <=7 s | **50.8 s** | takes a fresh running-taken snapshot - hits the trap |
 | `delete` (API returns) | <=1 s | **1.3 s** PASS | async, returns `oriop_...` |
 
 Verified semantics, not just timings:
@@ -182,3 +183,31 @@ agent's persistent outbound tunnel removes it.
 
 Neither is a design flaw; both are unbuilt components, with measured evidence
 that the design reaches target once they exist.
+
+
+## Correction: `fork` only avoids the 45 s trap when the source is stopped
+
+An earlier entry in this document reported fork at 9.1 s and claimed the
+stopped-snapshot rule was implemented. That was measured with the source
+**stopped**, and generalised too far.
+
+A natural experiment, same binary, same host, minutes apart:
+
+| sequence | source state at fork | fork |
+|---|---|---|
+| `new -> exec -> stop -> fork` | stopped | **8.68 s** |
+| `new -> exec -> stop -> resume -> fork` | running | **50.76 s** |
+
+So `fork` takes a **fresh** snapshot of the source when it is running, which is
+exactly the running-taken snapshot that costs ~45 s to clone from. The rule was
+derived correctly and is only honoured by accident — when the source happens to
+be stopped and the snapshot `stop` produced is the latest one.
+
+The fix is what the spec already said: fork should clone from **the latest
+stopped-taken snapshot** rather than snapshotting the source on demand. If none
+exists, either stop/snapshot/start the source (~10 s, brief source downtime) or
+report the cost honestly. The semantic price of reusing an older snapshot is that
+writes since the last stop are not in the fork, which must be stated in `ori
+fork`'s output rather than hidden.
+
+**Open. `fork` of a running sandbox does not meet its target.**

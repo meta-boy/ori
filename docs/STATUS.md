@@ -15,7 +15,7 @@ LXC containers, confirmed by `pct list` on the host.
 | `ori exec` | **real** | 2.7 s (via `pct exec`; guest agent will cut this) |
 | `ori stop` | **real** | 4.7 s, real snapshot on host |
 | `ori resume` | **real** | 5.4 s, data intact |
-| `ori fork` | **real** | 9.1 s, data inherited, parent unaffected |
+| `ori fork` | **real** | **8.7 s from a stopped source; 50.8 s from a running one** - see correction in BENCHMARKS |
 | `ori delete` | **real** | 1.3 s, async `oriop_…`, container removed |
 | `ori login` / `logout` / `status` | **real** | |
 | `ori serve` / `ori agent` | **real** | one binary, three roles |
