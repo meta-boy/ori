@@ -132,3 +132,32 @@ async fn missing_cwd_is_an_error_not_a_crash() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn missing_binary_is_a_spawn_error() {
+    let dir = temp_dir("nobin");
+    let agent = Agent::with_logs_dir(cfg(&dir), dir.join("state"));
+    let frames = request(
+        &agent,
+        Incoming::Exec {
+            id: "r5".into(),
+            cmd: vec!["definitely-not-a-real-binary-xyz".into()],
+            cwd: None,
+            timeout: Some(30),
+            env: None,
+            detach: Some(false),
+        },
+    )
+    .await;
+    assert!(
+        frames
+            .iter()
+            .any(|f| matches!(f, Outgoing::Error { code, .. } if code == "spawn")),
+        "expected a spawn error frame, not an execResult: {frames:?}"
+    );
+    assert!(
+        !frames.iter().any(|f| matches!(f, Outgoing::ExecResult { .. })),
+        "a failed spawn must not look like a completed command"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -177,6 +177,7 @@ pub async fn run(
         stderr,
         duration: start.elapsed(),
         timed_out,
+        spawn_error: None,
     }
 }
 
@@ -300,5 +301,16 @@ mod tests {
             serr,
         ));
         assert_eq!(outcome.exit_code, 128 + 15);
+    }
+
+    #[tokio::test]
+    async fn missing_binary_is_a_spawn_error_not_an_exit_code() {
+        let (sout, _rout) = mpsc::channel(4);
+        let (serr, _rerr) = mpsc::channel(4);
+        let argv = vec!["definitely-not-a-real-binary-xyz".into()];
+        let outcome =
+            run(&argv, Path::new("/"), &HashMap::new(), Duration::from_secs(30), sout, serr).await;
+        assert!(outcome.spawn_error.is_some());
+        assert_eq!(outcome.pid, 0);
     }
 }

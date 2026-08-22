@@ -263,3 +263,32 @@ something must explicitly own the join, or the join silently belongs to nobody.
 Remaining work: `create_sandbox` tries `pool.claim(key)` first, falls back to the
 cold path on a miss, and emits `cloning` in the event stream either way so a miss
 is visible rather than just slow.
+
+### 9. Two pool seams in files the wiring pass did not own
+
+Both found by the agent that wired the pool into `create`, in code it was scoped
+out of. Both are real:
+
+1. **`tasks.rs` orphan pass would eat pool slots.** The mock-orphan sweep
+   destroys any provider instance with no sandbox row. A warm pool slot is
+   exactly that — a live instance deliberately without a sandbox row — so
+   running `--provider mock --pool-depth N` would have the reaper delete the
+   pool out from under itself. Real providers are unaffected (no orphan pass
+   runs for Proxmox), so this bites tests and local development, not production.
+
+2. **`deletion.rs` leaks `pool_slots` rows.** Deleting a sandbox that came from
+   a claimed slot destroys the container but never calls
+   `pool.release_claimed_by()`, so the row lingers until the next restart's pool
+   reconcile. This one does affect Proxmox.
+
+### 10. One genuinely flaky test
+
+`ndjson_is_flushed_per_line_not_buffered` asserts first-line arrival inside a
+1 s wall-clock budget. It passes in isolation (3/3) and fails occasionally under
+full-suite parallel load. The property it checks is real and worth keeping — a
+buffered NDJSON response is a genuine bug — but a wall-clock assertion in a
+parallel test run is measuring the machine, not the code. Give it a generous
+budget or serialise it.
+
+I hit this myself: a one-off `ori-server` failure I could not reproduce was this
+test, and I nearly wrote it off as noise without identifying it.
