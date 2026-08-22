@@ -51,30 +51,24 @@ impl SetupState {
 
 /// Tracks and runs the setup script.
 pub struct SetupRunner {
-    spec: Option<SetupSpec>,
     state: Arc<Mutex<SetupState>>,
     started: AtomicBool,
+    configured: AtomicBool,
 }
 
 impl SetupRunner {
-    pub fn new(spec: Option<SetupSpec>) -> Self {
-        let state = if spec.is_some() {
-            SetupState::Pending
-        } else {
-            // No script: a status read reports a neutral state; the runner
-            // simply never fires.
-            SetupState::Pending
-        };
+    pub fn new() -> Self {
         Self {
-            spec,
-            state: Arc::new(Mutex::new(state)),
+            state: Arc::new(Mutex::new(SetupState::Pending)),
             started: AtomicBool::new(false),
+            configured: AtomicBool::new(false),
         }
     }
 
-    /// Whether a setup script was supplied with the claim.
+    /// Whether a setup script has been supplied (via config or an `apply`
+    /// message) and started or queued.
     pub fn has_script(&self) -> bool {
-        self.spec.is_some()
+        self.configured.load(Ordering::SeqCst)
     }
 
     pub fn state(&self) -> SetupState {
@@ -85,17 +79,20 @@ impl SetupRunner {
         *self.state.lock().unwrap() = s;
     }
 
-    /// Start the script in the background, reporting transitions over `tx`.
-    /// No-op when there is no script or it already started.
-    pub async fn start(&self, logs_dir: &Path, tx: mpsc::Sender<Outgoing>) {
-        let Some(spec) = self.spec.clone() else {
+    /// Start the supplied setup script in the background, reporting transitions
+    /// over `tx`. No-op when there is no script or it already started. The
+    /// effective spec is resolved by the caller (config claim vs `apply`
+    /// message) so this is safe to call from both paths.
+    pub async fn start(&self, spec: Option<&SetupSpec>, logs_dir: &Path, tx: mpsc::Sender<Outgoing>) {
+        let Some(spec) = spec else {
             return;
         };
+        self.configured.store(true, Ordering::SeqCst);
         if self.started.swap(true, Ordering::SeqCst) {
             return;
         }
 
-        let script_path = match self.materialize_script(&spec, logs_dir) {
+        let script_path = match self.materialize_script(spec, logs_dir) {
             Ok(p) => p,
             Err(e) => {
                 self.set_state(SetupState::Failed(e.to_string()));
@@ -264,8 +261,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ori-agent-setup-ok-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (tx, _rx) = mpsc::channel(16);
-        let runner = SetupRunner::new(Some(spec("echo setup ran")));
-        runner.start(&dir, tx).await;
+        let runner = SetupRunner::new();
+        let s = spec("echo setup ran");
+        runner.start(Some(&s), &dir, tx).await;
         // Give the background task a moment.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert_eq!(runner.state(), SetupState::Done);
@@ -277,8 +275,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ori-agent-setup-fail-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (tx, mut rx) = mpsc::channel(16);
-        let runner = SetupRunner::new(Some(spec("echo boom >&2; exit 3")));
-        runner.start(&dir, tx).await;
+        let runner = SetupRunner::new();
+        let s = spec("echo boom >&2; exit 3");
+        runner.start(Some(&s), &dir, tx).await;
         let mut saw = None;
         while let Some(msg) = rx.recv().await {
             if let Outgoing::SetupStatus { status, error } = msg {
@@ -299,9 +298,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ori-agent-setup-once-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (tx, _rx) = mpsc::channel(16);
-        let runner = SetupRunner::new(Some(spec("echo hi")));
-        runner.start(&dir, tx.clone()).await;
-        runner.start(&dir, tx).await;
+        let runner = SetupRunner::new();
+        let s = spec("echo hi");
+        runner.start(Some(&s), &dir, tx.clone()).await;
+        runner.start(Some(&s), &dir, tx).await;
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert_eq!(runner.state(), SetupState::Done);
         std::fs::remove_dir_all(&dir).ok();
@@ -313,8 +313,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let big = "a".repeat(65 * 1024);
         let (tx, mut rx) = mpsc::channel(16);
-        let runner = SetupRunner::new(Some(spec(&big)));
-        runner.start(&dir, tx).await;
+        let runner = SetupRunner::new();
+        let s = spec(&big);
+        runner.start(Some(&s), &dir, tx).await;
         let mut saw = None;
         while let Some(msg) = rx.recv().await {
             if let Outgoing::SetupStatus { status, error } = msg {

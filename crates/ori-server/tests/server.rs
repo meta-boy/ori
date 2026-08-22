@@ -18,7 +18,8 @@ use tower::ServiceExt;
 use ori_server::config::Config;
 use ori_server::db;
 use ori_server::mock::MockProvider;
-use ori_server::proto::{MachineType, Provider};
+use ori_server::pool::{PoolConfig, PoolKey, PoolManager};
+use ori_server::proto::{MachineType, Provider, SnapshotRef};
 use ori_server::state::AppState;
 use ori_server::tasks;
 
@@ -292,6 +293,120 @@ async fn create_streams_ndjson_with_exact_line_shapes() {
         .as_str()
         .unwrap()
         .contains(&id));
+}
+
+// ---------------------------------------------------------------------------
+// warm pool: create claims a pre-started slot, cold-creates on a miss
+// ---------------------------------------------------------------------------
+
+/// A `test_app` with the warm pool enabled. The pool is seeded manually
+/// (golden + refill) so tests are deterministic; `build_app` spawns no refill
+/// loop, matching how tests use the rest of the server.
+async fn test_app_with_pool() -> TestApp {
+    let db = db::open_in_memory().await.unwrap();
+    let provider = Arc::new(MockProvider::new());
+    let config = Config {
+        domain: "ori.test".to_string(),
+        pool_depth: 1,
+        ..Config::default()
+    };
+    let app = ori_server::build_app(db.clone(), provider.clone(), config);
+    TestApp { app, provider, db }
+}
+
+fn pool_key() -> PoolKey {
+    PoolKey {
+        provider: "mock".into(),
+        machine_type: MachineType::Default,
+        environment_version: 1,
+    }
+}
+
+/// Seed warm slots for the default key the way the background refill loop
+/// does: register a golden snapshot, then clone+start from it.
+async fn seed_pool(app: &TestApp, depth: usize) {
+    let pm = PoolManager::new(
+        app.db.clone(),
+        app.provider.clone(),
+        PoolConfig {
+            depth,
+            ..PoolConfig::default()
+        },
+    );
+    let key = pool_key();
+    pm.register_golden(
+        &key,
+        "base",
+        &SnapshotRef {
+            provider: "mock".into(),
+            name: "golden-base".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(pm.refill_key(&key).await.unwrap(), depth);
+    assert_eq!(pm.available_count(&key).await.unwrap(), depth);
+}
+
+/// `ori new` with a warm slot takes the claim, never cold-creates, and the
+/// stream has no `cloning` event (nothing was cloned).
+#[tokio::test]
+async fn create_claims_a_warm_slot_instead_of_cold_creating() {
+    let t = test_app_with_pool().await;
+    seed_pool(&t, 1).await;
+
+    let token = bootstrap_key(&t.app).await;
+    let (id, stream) = create_sandbox(&t.app, &token, json!({})).await;
+
+    let events = parse_stream(&stream);
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["created", "state", "state", "ready"]);
+    assert_eq!(events[1]["state"], "provisioning");
+    assert_eq!(events[2]["state"], "ready");
+
+    // the provider was never asked to cold-create, and the slot is gone
+    assert_eq!(t.provider.registry.lock().unwrap().create_calls, 0);
+    let pm = PoolManager::new(
+        t.db.clone(),
+        t.provider.clone(),
+        PoolConfig {
+            depth: 1,
+            ..PoolConfig::default()
+        },
+    );
+    assert_eq!(pm.available_count(&pool_key()).await.unwrap(), 0);
+
+    let (_, v) = sandbox_info(&t.app, &token, &id).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+    assert!(v["sandbox"]["ip"].is_string());
+}
+
+/// A miss falls back to the cold path and the `cloning` event makes the miss
+/// visible in the stream instead of a silent ~9 s pause.
+#[tokio::test]
+async fn create_falls_back_to_cold_path_on_pool_miss_and_emits_cloning() {
+    let t = test_app_with_pool().await;
+    // pool enabled but empty: every create misses
+    let token = bootstrap_key(&t.app).await;
+    let (id, stream) = create_sandbox(&t.app, &token, json!({})).await;
+
+    let events = parse_stream(&stream);
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["created", "state", "state", "state", "ready"]);
+    assert_eq!(events[1]["state"], "provisioning");
+    assert_eq!(events[2]["state"], "cloning");
+    assert_eq!(events[3]["state"], "ready");
+
+    // the cold path really ran
+    assert_eq!(t.provider.registry.lock().unwrap().create_calls, 1);
+    let (_, v) = sandbox_info(&t.app, &token, &id).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
 }
 
 #[tokio::test]
@@ -836,6 +951,7 @@ async fn ttl_reaper_stops_expired_sandboxes_once() {
         db: t.db.clone(),
         provider: t.provider.clone(),
         config: Default::default(),
+        pool: None,
     };
     tasks::reap_expired(&state).await.unwrap();
 
@@ -868,6 +984,7 @@ async fn reconciler_marks_drift_error_and_destroys_orphans() {
         db: t.db.clone(),
         provider: t.provider.clone(),
         config: Default::default(),
+        pool: None,
     };
 
     // 1. drift: provider says the instance is gone -> sandbox goes to error
@@ -923,6 +1040,7 @@ async fn reconcile_does_not_demote_a_healthy_ready_sandbox() {
         db: t.db.clone(),
         provider: t.provider.clone(),
         config: Default::default(),
+        pool: None,
     };
     tasks::reconcile_once(&state).await.unwrap();
 

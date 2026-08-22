@@ -28,6 +28,10 @@ pub struct ExecOutcome {
     pub stderr: Vec<u8>,
     pub duration: Duration,
     pub timed_out: bool,
+    /// Set when the command could not be spawned at all (e.g. not found).
+    /// A spawn failure is a failed call, not a failed command — the caller
+    /// should surface it as an error, not an exit code.
+    pub spawn_error: Option<String>,
 }
 
 impl Default for ExecOutcome {
@@ -39,6 +43,7 @@ impl Default for ExecOutcome {
             stderr: Vec::new(),
             duration: Duration::ZERO,
             timed_out: false,
+            spawn_error: None,
         }
     }
 }
@@ -64,6 +69,7 @@ pub async fn run(
         return ExecOutcome {
             exit_code: 2,
             stderr: b"empty command".to_vec(),
+            spawn_error: Some("empty command".into()),
             ..Default::default()
         };
     }
@@ -84,8 +90,9 @@ pub async fn run(
         Ok(c) => c,
         Err(e) => {
             return ExecOutcome {
-                exit_code: 2,
+                exit_code: 127,
                 stderr: format!("cannot spawn {}: {e}", argv[0]).into_bytes(),
+                spawn_error: Some(format!("cannot spawn {}: {e}", argv[0])),
                 ..Default::default()
             };
         }

@@ -14,6 +14,7 @@ pub async fn serve(args: ServeArgs, _ctx: &Ctx) -> Result<(), CliError> {
     cfg.database_path = PathBuf::from(&args.db_path);
     cfg.domain = args.domain.clone();
     cfg.provider = args.provider.into();
+    cfg.pool_depth = args.pool_depth;
 
     // tracing for the control plane (mirrors the old standalone binary). The
     // global default is `ori_server=info` so a bare `ori serve` is quiet but

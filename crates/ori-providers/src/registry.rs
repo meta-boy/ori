@@ -207,7 +207,7 @@ mod tests {
             .expect("register");
 
         assert_eq!(registry.names(), vec!["docker"]);
-        assert_eq!(registry.capabilities("docker").unwrap().linked_clone, true);
+        assert!(registry.capabilities("docker").unwrap().linked_clone);
         assert_eq!(registry.capabilities("missing"), None);
         assert_eq!(registry.all_capabilities().count(), 1);
     }

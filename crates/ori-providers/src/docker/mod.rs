@@ -233,6 +233,10 @@ impl DockerProvider {
             image: Some(image.to_string()),
             hostname: Some(spec.name.clone()),
             cmd,
+            // `docker stop` waits this long for SIGTERM before SIGKILL. The
+            // keep-alive process ignores SIGTERM, so the default 10 s grace is
+            // 10 s of dead time per stop; 2 s keeps stop inside budget.
+            stop_timeout: Some(2),
             tty: Some(false),
             open_stdin: Some(false),
             attach_stdout: Some(false),
@@ -501,6 +505,7 @@ impl Provider for DockerProvider {
                 .config
                 .and_then(|c| c.hostname)
                 .or(Some(name.clone())),
+            stop_timeout: Some(2),
             tty: Some(false),
             open_stdin: Some(false),
             attach_stdout: Some(false),

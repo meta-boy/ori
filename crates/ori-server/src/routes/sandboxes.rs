@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use crate::auth::ApiKeyAuth;
 use crate::error::{ApiError, ApiResult};
 use crate::ndjson::ndjson_response;
+use crate::pool::{ClaimResult, PoolKey};
 use crate::proto::{
     BoxState, Commands, CreateSandboxRequest, ExecRequest, ExecRequestBody, ExecResponse,
     ExtendSandboxRequest, ForkSandboxRequest, InstanceHandle, InstanceSpec, MachineType, PageInfo,
@@ -157,6 +158,75 @@ async fn run_create(
         environment_version: 1,
         env_vars,
     };
+
+    // Warm pool first: a claim hands over a pre-started, already-running
+    // instance, so `ori new` returns in ~0.9 s instead of ~9.2 s. Claim is the
+    // only pool call on a request path — one atomic `UPDATE ... RETURNING`, no
+    // cloning on this path. A miss or a failed claim falls through to the cold
+    // path below.
+    if let Some(pool) = &state.pool {
+        let key = PoolKey {
+            provider: state.provider.name().to_string(),
+            machine_type,
+            environment_version: spec.environment_version,
+        };
+        match pool.claim(&key, &id).await {
+            Ok(ClaimResult::Hit(slot)) => {
+                tracing::info!(
+                    sandbox = %id, key = %key.key_string(), slot = %slot.slot_id,
+                    "create: pool claim"
+                );
+                let _ = repo::set_provider_handle(&state.db, &id, &slot.instance_handle.id).await;
+                if !emit(
+                    &tx,
+                    StreamEvent::State {
+                        id: id.clone(),
+                        state: "ready".into(),
+                    },
+                ) {
+                    return;
+                }
+                let _ = repo::transition(&state.db, &id, &["provisioning"], BoxState::Ready).await;
+                finish_ready(
+                    &state,
+                    &tx,
+                    &id,
+                    &slot.instance_handle,
+                    &slug,
+                    stop_after,
+                    req.setup_script.as_deref(),
+                )
+                .await;
+                return;
+            }
+            Ok(ClaimResult::Miss) => {
+                tracing::info!(
+                    sandbox = %id, key = %key.key_string(),
+                    "create: pool miss, taking the cold path"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    sandbox = %id, key = %key.key_string(), error = %e,
+                    "create: pool claim failed, taking the cold path"
+                );
+            }
+        }
+    }
+
+    // Cold path. `cloning` is emitted before `create` so a pool miss shows up
+    // in the NDJSON stream rather than as a silent ~9 s pause.
+    if !emit(
+        &tx,
+        StreamEvent::State {
+            id: id.clone(),
+            state: "cloning".into(),
+        },
+    ) {
+        return;
+    }
+    let _ = repo::transition(&state.db, &id, &["provisioning"], BoxState::Cloning).await;
+
     let handle = match state.provider.create(&spec).await {
         Ok(h) => h,
         Err(e) => {
@@ -182,16 +252,6 @@ async fn run_create(
         &tx,
         StreamEvent::State {
             id: id.clone(),
-            state: "cloning".into(),
-        },
-    ) {
-        return;
-    }
-    let _ = repo::transition(&state.db, &id, &["provisioning"], BoxState::Cloning).await;
-    if !emit(
-        &tx,
-        StreamEvent::State {
-            id: id.clone(),
             state: "ready".into(),
         },
     ) {
@@ -199,33 +259,57 @@ async fn run_create(
     }
     let _ = repo::transition(&state.db, &id, &["cloning"], BoxState::Ready).await;
 
-    let addr = state.provider.addresses(&handle).await.ok();
+    finish_ready(
+        &state,
+        &tx,
+        &id,
+        &handle,
+        &slug,
+        stop_after,
+        req.setup_script.as_deref(),
+    )
+    .await;
+}
+
+/// Shared tail of the create path: resolve the instance addresses, persist
+/// them, and emit the terminal `ready` event. Used by both the pool-claim and
+/// cold-create paths so they cannot drift apart.
+async fn finish_ready(
+    state: &AppState,
+    tx: &mpsc::UnboundedSender<Bytes>,
+    id: &str,
+    handle: &InstanceHandle,
+    slug: &str,
+    stop_after: Option<String>,
+    setup_script: Option<&str>,
+) {
+    let addr = state.provider.addresses(handle).await.ok();
     let ip = addr.as_ref().and_then(|a| a.ip.clone());
     let desktop_url = addr.as_ref().and_then(|a| a.desktop_url.clone());
-    let url = sandbox_url(&state.config.domain, &slug);
+    let url = sandbox_url(&state.config.domain, slug);
     let _ = repo::set_instance_addresses(
         &state.db,
-        &id,
+        id,
         ip.as_deref(),
         Some(&url),
         desktop_url.as_deref(),
     )
     .await;
     // a setup script is accepted and reported as run (the mock runs nothing)
-    if req.setup_script.is_some() {
-        let _ = repo::set_setup_status(&state.db, &id, "done", None).await;
+    if setup_script.is_some() {
+        let _ = repo::set_setup_status(&state.db, id, "done", None).await;
     }
 
     let _ = emit(
-        &tx,
+        tx,
         StreamEvent::Ready {
-            id: id.clone(),
+            id: id.to_string(),
             state: "ready".into(),
             ip,
             url: Some(url),
             desktop_url,
             stop_after,
-            commands: commands_for(&id),
+            commands: commands_for(id),
         },
     );
 }

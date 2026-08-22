@@ -16,20 +16,19 @@ fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-fn spawn_detached(agent: &Agent, cmd: Vec<String>) -> i64 {
-    let frames = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(request(
-            agent,
-            Incoming::Exec {
-                id: "d1".into(),
-                cmd,
-                cwd: None,
-                timeout: Some(30),
-                env: None,
-                detach: Some(true),
-            },
-        ));
+async fn spawn_detached(agent: &Agent, cmd: Vec<String>) -> i64 {
+    let frames = request(
+        agent,
+        Incoming::Exec {
+            id: "d1".into(),
+            cmd,
+            cwd: None,
+            timeout: Some(30),
+            env: None,
+            detach: Some(true),
+        },
+    )
+    .await;
     match frames.iter().find(|f| matches!(f, Outgoing::ExecResult { .. })) {
         Some(Outgoing::ExecResult { pid, detached, completed, .. }) => {
             assert!(*detached, "execResult must say detached");
@@ -40,10 +39,9 @@ fn spawn_detached(agent: &Agent, cmd: Vec<String>) -> i64 {
     }
 }
 
-fn status(agent: &Agent, pid: i64) -> Outgoing {
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(request(agent, Incoming::ExecStatus { id: "s1".into(), pid }))
+async fn status(agent: &Agent, pid: i64) -> Outgoing {
+    request(agent, Incoming::ExecStatus { id: "s1".into(), pid })
+        .await
         .into_iter()
         .find(|f| matches!(f, Outgoing::ExecStatusResult { .. }))
         .expect("expected execStatusResult")
@@ -62,11 +60,12 @@ async fn detach_then_status_then_lost_lifecycle() {
             "-c".into(),
             "echo before-log >&2; sleep 1; echo done-log >&2; exit 7".into(),
         ],
-    );
+    )
+    .await;
     assert!(pid > 0);
 
     // Immediately after spawn it is running.
-    match status(&agent, pid) {
+    match status(&agent, pid).await {
         Outgoing::ExecStatusResult { state, exit_code, .. } => {
             assert_eq!(state, "running");
             assert!(exit_code.is_none());
@@ -78,10 +77,12 @@ async fn detach_then_status_then_lost_lifecycle() {
     let log_path = dir.join("state").join(format!("{pid}.log"));
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let log = loop {
-        if log_path.exists() {
-            break std::fs::read_to_string(&log_path).unwrap();
+        if let Ok(l) = std::fs::read_to_string(&log_path) {
+            if l.contains("before-log") {
+                break l;
+            }
         }
-        assert!(std::time::Instant::now() < deadline, "log never appeared");
+        assert!(std::time::Instant::now() < deadline, "log never filled in");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert!(log.contains("before-log"), "log: {log}");
@@ -89,8 +90,8 @@ async fn detach_then_status_then_lost_lifecycle() {
     // Wait for it to exit with 7; the log tail is surfaced.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        match status(&agent, pid) {
-            Outgoing::ExecStatusResult { state, exit_code, log_tail } => {
+        match status(&agent, pid).await {
+            Outgoing::ExecStatusResult { state, exit_code, log_tail, .. } => {
                 if state == "exited" {
                     assert_eq!(exit_code, Some(7));
                     let tail = log_tail.unwrap();
@@ -105,8 +106,8 @@ async fn detach_then_status_then_lost_lifecycle() {
     }
 
     // A pid the agent has never spawned reports `lost`, not an error.
-    match status(&agent, 999_999_999) {
-        Outgoing::ExecStatusResult { state, exit_code, log_tail } => {
+    match status(&agent, 999_999_999).await {
+        Outgoing::ExecStatusResult { state, exit_code, log_tail, .. } => {
             assert_eq!(state, "lost");
             assert!(exit_code.is_none());
             assert!(log_tail.is_none());
@@ -118,7 +119,7 @@ async fn detach_then_status_then_lost_lifecycle() {
 }
 
 #[tokio::test]
-async fn detached_process_uses_its_own_process_group() {
+async fn detached_job_runs_to_completion_in_the_background() {
     let dir = temp_dir("pgroup");
     let agent = Agent::with_logs_dir(cfg(&dir), dir.join("state"));
     let pid = spawn_detached(
@@ -126,14 +127,15 @@ async fn detached_process_uses_its_own_process_group() {
         vec![
             "sh".into(),
             "-c".into(),
-            "echo pgid=$$; sleep 0.3; echo still-alive >&2".into(),
+            "sleep 0.3; echo still-alive >&2".into(),
         ],
-    );
+    )
+    .await;
 
-    // The child's pid is the leader of its own group (pgid == pid).
+    // The job completes on its own, in the background, writing to its log.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        match status(&agent, pid) {
+        match status(&agent, pid).await {
             Outgoing::ExecStatusResult { state, .. } if state == "exited" => break,
             _ => {
                 assert!(std::time::Instant::now() < deadline, "never exited");

@@ -214,6 +214,7 @@ impl Conformance {
         let src_spec = self.spec("clone-src");
         let child_spec = self.spec("clone-child");
         let mut created: Vec<InstanceHandle> = Vec::new();
+        let mut snap: Option<ori_providers::reconcile::SnapshotRef> = None;
         let result: Result<(), String> = async {
             let src = self
                 .provider
@@ -221,12 +222,13 @@ impl Conformance {
                 .await
                 .map_err(|e| format!("create src: {e}"))?;
             created.push(src.clone());
-            let snap = self
+            let s = self
                 .provider
                 .snapshot(&src, "conf-golden")
                 .await
                 .map_err(|e| format!("snapshot: {e}"))?;
-            let child = Provider::clone_from(self.provider.as_ref(), &snap, &child_spec)
+            snap = Some(s.clone());
+            let child = Provider::clone_from(self.provider.as_ref(), &s, &child_spec)
                 .await
                 .map_err(|e| format!("clone_from: {e}"))?;
             created.push(child.clone());
@@ -248,6 +250,9 @@ impl Conformance {
         .await;
         for h in &created {
             let _ = self.provider.destroy(h).await;
+        }
+        if let Some(s) = &snap {
+            let _ = self.provider.snapshot_delete(s).await;
         }
         result
     }

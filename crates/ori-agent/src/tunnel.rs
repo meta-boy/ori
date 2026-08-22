@@ -91,6 +91,11 @@ async fn serve_once(cfg: &Config, agent: &Arc<Agent>) -> Result<(), AgentError> 
     .await
     .map_err(|e| AgentError::Tunnel(format!("hello channel: {e}")))?;
 
+    // The claim was applied at boot; if the config carried a setup script, run
+    // it now that a live tunnel exists to report `setupStatus` over. Idempotent
+    // with a later `apply` message that also carries setup.
+    agent.start_config_setup(tx.clone()).await;
+
     loop {
         tokio::select! {
             inbound = stream.next() => {

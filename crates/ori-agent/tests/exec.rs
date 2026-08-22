@@ -95,7 +95,11 @@ async fn resolves_cwd_against_the_work_dir() {
     match exec_result(&frames).unwrap() {
         Outgoing::ExecResult { stdout, exit_code, .. } => {
             assert_eq!(*exit_code, 0);
-            assert_eq!(stdout.trim(), work.join("sub").to_string_lossy());
+            let expected = std::fs::canonicalize(work.join("sub"))
+                .unwrap_or_else(|_| work.join("sub"))
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(stdout.trim(), expected);
         }
         other => panic!("expected execResult, got {other:?}"),
     }

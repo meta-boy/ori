@@ -1,6 +1,11 @@
 //! Shared helpers for `ori-agent` integration tests. These go through the
 //! public `Agent::handle` API — the exact path the tunnel uses — so they
 //! exercise the real request pipeline (wire frame → handler → result).
+//!
+//! Compiled into every test binary; each binary uses a subset, so silence the
+//! per-crate unused warnings.
+
+#![allow(dead_code)]
 
 use std::path::Path;
 use std::time::Duration;
@@ -27,11 +32,10 @@ pub async fn request(agent: &Agent, msg: Incoming) -> Vec<Outgoing> {
     let (tx, mut rx) = mpsc::channel(64);
     agent.handle(msg, tx).await.expect("handler must not error");
     let mut out = Vec::new();
-    loop {
-        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-            Ok(Some(frame)) => out.push(frame),
-            _ => break,
-        }
+    while let Ok(Some(frame)) =
+        tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
+    {
+        out.push(frame);
     }
     out
 }
@@ -46,17 +50,12 @@ pub async fn request_until(
     let (tx, mut rx) = mpsc::channel(64);
     agent.handle(msg, tx).await.expect("handler must not error");
     let mut out = Vec::new();
-    loop {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(frame)) => {
-                if pred(&frame) {
-                    out.push(frame);
-                    break;
-                }
-                out.push(frame);
-            }
-            _ => break,
+    while let Ok(Some(frame)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+        if pred(&frame) {
+            out.push(frame);
+            break;
         }
+        out.push(frame);
     }
     out
 }

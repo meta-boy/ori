@@ -42,7 +42,7 @@ mod wire;
 pub use config::{Claim, Config, RepoRef, SecretFile, SetupSpec};
 pub use error::AgentError;
 pub use runtime::Agent;
-pub use wire::{Incoming, Outgoing};
+pub use wire::{Incoming, Outgoing, RepoMsg, SecretFileMsg, SetupMsg};
 
 /// Agent entrypoint. Blocks until the process is terminated.
 ///
@@ -53,9 +53,9 @@ pub fn run(config: Option<std::path::PathBuf>) -> Result<(), Box<dyn std::error:
     #[cfg(not(target_os = "linux"))]
     {
         let _ = config;
-        return Err(
+        Err(
             "ori agent runs inside Linux sandboxes and is not available on this platform".into(),
-        );
+        )
     }
 
     #[cfg(target_os = "linux")]

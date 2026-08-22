@@ -39,7 +39,7 @@ impl Agent {
     pub fn new(cfg: Config) -> Self {
         let logs_dir = logs_dir();
         let _ = std::fs::create_dir_all(&logs_dir);
-        let setup = SetupRunner::new(cfg.claim.setup.clone());
+        let setup = SetupRunner::new();
         Self {
             cfg,
             claim_env: Mutex::new(HashMap::new()),
@@ -54,7 +54,7 @@ impl Agent {
     /// different root.
     pub fn with_logs_dir(cfg: Config, logs_dir: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&logs_dir);
-        let setup = SetupRunner::new(cfg.claim.setup.clone());
+        let setup = SetupRunner::new();
         Self {
             cfg,
             claim_env: Mutex::new(HashMap::new()),
@@ -77,6 +77,15 @@ impl Agent {
         crate::inject::apply_claim(claim, &mut env_map).await?;
         *self.claim_env.lock().unwrap() = env_map;
         Ok(())
+    }
+
+    /// Start the config-carried setup script, once a live tunnel exists to
+    /// report `setupStatus` over. Idempotent with an `apply`-message start:
+    /// whichever starts first wins; the other is a no-op.
+    pub async fn start_config_setup(&self, tx: mpsc::Sender<Outgoing>) {
+        self.setup
+            .start(self.cfg.claim.setup.as_ref(), &self.logs_dir, tx)
+            .await;
     }
 
     /// Handle one incoming request, sending any number of frames over `tx`.
@@ -128,7 +137,11 @@ impl Agent {
                 match result {
                     Ok(()) => {
                         // Claim applied → the sandbox is ready; kick off setup.
-                        if let Some(spec) = &claim.setup {
+                        let setup_spec = claim
+                            .setup
+                            .as_ref()
+                            .or(self.cfg.claim.setup.as_ref());
+                        if let Some(spec) = setup_spec {
                             if let Err(e) = Config::validate_setup(spec) {
                                 tx.send(Outgoing::ApplyResult {
                                     id,
@@ -139,7 +152,7 @@ impl Agent {
                                 return Ok(());
                             }
                         }
-                        self.setup.start(&self.logs_dir, tx.clone()).await;
+                        self.setup.start(setup_spec, &self.logs_dir, tx.clone()).await;
                         tx.send(Outgoing::ApplyResult { id, ok: true, error: None })
                             .await?;
                     }
@@ -281,7 +294,7 @@ impl Agent {
         &self,
         id: &str,
         cmd: &[String],
-        workdir: &PathBuf,
+        workdir: &Path,
         env: &HashMap<String, String>,
         timeout: Duration,
         tx: mpsc::Sender<Outgoing>,
@@ -289,7 +302,7 @@ impl Agent {
         let (sout, mut rout) = mpsc::channel::<Vec<u8>>(16);
         let (serr, mut rerr) = mpsc::channel::<Vec<u8>>(16);
         let cmd_owned = cmd.to_vec();
-        let wd = workdir.clone();
+        let wd = workdir.to_path_buf();
         let env_owned = env.clone();
         let mut task = tokio::spawn(async move {
             crate::exec::run(&cmd_owned, &wd, &env_owned, timeout, sout, serr).await
@@ -318,6 +331,19 @@ impl Agent {
                 }
             }
         };
+
+        // A command that could not even be spawned is a failed call, not a
+        // failed command: surface it as an error so the CLI can distinguish a
+        // dead API call from a non-zero remote exit code.
+        if let Some(spawn_err) = &outcome.spawn_error {
+            tx.send(Outgoing::Error {
+                id: Some(id.to_string()),
+                code: "spawn".into(),
+                message: spawn_err.clone(),
+            })
+            .await?;
+            return Ok(());
+        }
 
         tx.send(Outgoing::ExecResult {
             id: id.to_string(),
@@ -416,7 +442,7 @@ mod tests {
         cfg.claim.env.insert("CLAIMED".into(), "yes".into());
         let agent = Agent::new(cfg);
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(agent.apply_claim(&agent.cfg.claim.clone()));
+        rt.block_on(agent.apply_claim(&agent.cfg.claim.clone())).unwrap();
         let env = agent.command_env();
         assert_eq!(env.get("CLAIMED").map(String::as_str), Some("yes"));
         // Inherited env (PATH etc.) is preserved.
