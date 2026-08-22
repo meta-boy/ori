@@ -21,14 +21,16 @@ I/O-free carrying `sqlx` derives). The integration pass (`plans/C11`) must
 check that `ori-proto` stays dependency-light and I/O-free, and that
 `ori-agent` does not transitively depend on `ori-providers`.
 
-## Open: fork latency is 7× over target
+## Resolved: fork latency was 7× over target
 
-Measured fork total is **51–52 s** against a ≤7 s target. Cause is not the
-snapshot (1.44 s) but the linked clone from it (**44.9 s**). See
-`docs/BENCHMARKS.md`; a clone from a snapshot of a *stopped* container is
-1.7 s, so the penalty is specific to snapshots taken while running.
-Investigation in progress. Until resolved, `fork` does not meet its target and
-saying otherwise would be false.
+Was **51–52 s**. Root-caused to the *snapshot*, not the clone or the source
+(four-case experiment in `docs/BENCHMARKS.md`): a snapshot taken while the
+container was running is permanently ~20× more expensive to clone from. Fork now
+clones from a stopped-taken snapshot, which `stop` already produces for free.
+
+**Measured end to end through `ori fork` against the real host: 9.1 s.** Data
+inherited, parent unaffected. Slightly over the 7 s target, and the remainder is
+the same cold `start` cost that makes `new` 9.2 s — the warm pool addresses both.
 
 ## Corrected: the earlier "rollback poisons the thin pool" claim
 
@@ -212,7 +214,7 @@ writes `handle.to_string()` into `provider_handle` is a bug.
   bare `ORI_PVE_*` environment fails preflight with a TLS error until that is
   set. The provider logs loudly when insecure mode is on.
 
-### 7. Two `Provider` traits — the adapter cannot call the provider
+### 7. Two `Provider` traits — adapter unblocked, duplication remains
 
 Diagnosed while C11 was wiring Proxmox into the server:
 
@@ -237,7 +239,7 @@ when each crate needed one. This is the same root cause as bug 2
 implemented twice. Collapsing it removes an entire class of failure instead of
 fixing two instances of it.
 
-### 8. The warm pool is built and correct, but not wired into `new`
+### 8. The warm pool — wired into `new`, but still cannot fill (PARTIAL)
 
 `crates/ori-server/src/pool/` implements `PoolManager` and its 5 tests pass,
 including the two that matter most:
@@ -247,9 +249,16 @@ including the two that matter most:
   multi-connection pool; a single-connection one would serialise and pass falsely)
 - `released_slot_is_destroyed_not_returned_to_the_pool` — tenant isolation
 
-But `routes/sandboxes.rs` contains no reference to the pool, so `ori new` still
-takes the cold path at 9.2 s instead of claiming a pre-started container at
-~0.9 s. The pool is dead code until the create handler calls it.
+**Wiring: done.** `routes/sandboxes.rs` now calls
+`pool.claim(...)` first and falls back to the cold path on a miss, emitting
+`cloning` on the miss path so it is visible rather than merely slow. A
+`--pool-depth N` flag exists (default 0 = disabled) with two regression tests.
+
+**Still broken: the pool cannot fill.** `register_golden()` is never called in
+production, so `golden_snapshots` stays empty and refill has nothing to clone.
+Verified against the real host: with `--pool-depth 2`, both `pool_slots` and
+`golden_snapshots` were empty after 110 s. So `ori new` still pays 9.2 s cold.
+Refill now logs a reason instead of failing silently, which is what hid this.
 
 **Cause is an orchestration mistake, not an agent mistake.** The pool card was
 told to "expose a PoolManager API rather than rewriting handlers" so it would
