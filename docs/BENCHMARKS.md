@@ -129,8 +129,13 @@ hidden.
 
 ### Storage choice matters more than tuning
 
-This is an LVM-thin characteristic. **ZFS clones a snapshot of a live dataset in
-O(1)** and would remove the constraint entirely, making fork-from-live fast
-without any stop. If fork-from-live latency matters, ZFS is the storage
-recommendation — not a tuning flag on LVM-thin. Block zeroing was already tested
-and ruled out (see above).
+This is an LVM-thin characteristic. ZFS is expected to clone a snapshot of a
+live dataset in O(1), which would remove the constraint entirely — but that is
+**unverified here**. A trial on a file-backed zpool (zfs 2.4.3) snapshotted a
+running container in 1.42 s and then failed the clone with `rc=2`; the test did
+not capture the error text, so the cause is unknown and it may simply be an
+artifact of the file-backed pool or the storage's `content` configuration.
+
+Treat ZFS as a promising but untested option, not a recommendation. It is not
+on the critical path: the stopped-snapshot fork rule above already meets the
+7 s target. Block zeroing was tested and ruled out (see above).

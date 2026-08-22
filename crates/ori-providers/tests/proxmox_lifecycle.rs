@@ -25,6 +25,19 @@ fn repo_root() -> PathBuf {
         .join("..")
 }
 
+/// Multiply all budgets. Defaults to 1.0 (the strict `docs/BENCHMARKS.md`
+/// numbers). Set `ORI_PVE_BUDGET_SCALE` > 1 when running against a shared host
+/// that other agents are actively snapshotting/cloning/rolling back — the
+/// documented "poisoned thin-pool" condition makes a linked clone of a running
+/// source take ~44 s instead of ~2 s. CI runs the strict default.
+fn budget_scale() -> f32 {
+    std::env::var("ORI_PVE_BUDGET_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.0)
+        .max(1.0)
+}
+
 /// Load `ORI_PVE_*` from `.env.local` (repo root) into the environment, unless
 /// already set.
 fn load_env() {
@@ -90,6 +103,7 @@ fn spec(vmid: u32, name: &str) -> InstanceSpec {
 }
 
 fn assert_budget(label: &str, elapsed: Duration, budget: Duration) -> Result<(), String> {
+    let budget = Duration::from_secs_f32(budget.as_secs_f32() * budget_scale());
     if elapsed <= budget {
         println!("{label}: {elapsed:?}");
         Ok(())
