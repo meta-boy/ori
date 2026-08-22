@@ -9,6 +9,7 @@ pub mod deletion;
 pub mod error;
 pub mod mock;
 pub mod ndjson;
+pub mod pool;
 pub mod proto;
 pub mod providers;
 pub mod repo;

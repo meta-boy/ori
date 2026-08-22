@@ -8,10 +8,14 @@ description = "Sandbox backends behind cargo features: proxmox (default), docker
 default = ["proxmox"]
 # Proxmox LXC backend over the PVE REST API (C4).
 proxmox = ["dep:reqwest"]
-# C7 owns these modules and their feature wiring; the flags exist so the
-# workspace can build `--all-features` and C7 can land without touching C4.
-docker = []
+# Docker Engine backend over the docker API (C7). Container names are the
+# opaque instance ids; snapshots are committed images.
+docker = ["dep:bollard"]
+# Firecracker microVM backend (C7, stub: declares accurate capabilities, every
+# operation returns `ProviderNotImplemented`).
 firecracker = []
+# macOS container backend (C7, stub: declares accurate capabilities, every
+# operation returns `ProviderNotImplemented`).
 apple-container = []
 
 [dependencies]
@@ -23,6 +27,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"], optional = true }
+bollard = { version = "0.21", optional = true }
 
 [dev-dependencies]
 wiremock = "0.6"

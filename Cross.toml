@@ -1,0 +1,34 @@
+# Cross-compilation config for `cross` (https://github.com/cross-rs/cross).
+#
+# The release matrix (plans/C10-release.md) is four targets:
+#
+#   aarch64-apple-darwin      client on the dev's Mac (Apple Silicon)  -- host cargo
+#   x86_64-apple-darwin       client on Intel Macs                      -- host cargo
+#   x86_64-unknown-linux-musl server + agent on x86_64 golden images    -- cross
+#   aarch64-unknown-linux-musl server + agent on arm64 golden images    -- cross
+#
+# The two Linux targets are statically linked against musl so the `agent` role
+# (`ori agent`) is a static drop-in for any golden image, with no libc to
+# satisfy inside the sandbox. Cross builds them inside the pinned images below.
+#
+# The agent role is `#[cfg(target_os = "linux")]` (crates/ori-cli/src/command/
+# agent.rs); the macOS builds compile without it and simply do not offer the
+# subcommand, so only the Linux targets ever carry agent code.
+
+[build]
+# Nothing here by default; `cross` inherits the workspace Cargo.toml and
+# rust-toolchain.toml ("stable"). The image pins below are the only pins that
+# matter for reproducibility: the compiler inside is whatever stable the image
+# has, and `cross` installs the toolchain our rust-toolchain.toml requests when
+# they differ.
+
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.5"
+
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5"
+
+# The Apple targets are compiled with the host toolchain (cargo + clang from
+# Xcode), not cross. Keeping them out of the image table makes `cross` fall
+# through to the host (see the note in `cross --version` output), which is
+# exactly what we want: an SDK-linked Mach-O, not a static musl binary.

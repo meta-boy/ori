@@ -42,6 +42,22 @@ inside the sandbox and were scoped out of v1 deliberately.
 lifecycle — create, exec, snapshot, stop, resume, fork, delete — is real and
 measured. The access and account-management commands are not built.
 
+## Warm pool foundation — verified
+
+`scripts/golden-clone-check.sh --vmid 9501` against the live host:
+
+| step | measured |
+|---|---|
+| linked clone from `base` snapshot (`full=0`) | **2.40 s** (host load 3.78; 1.65–1.83 s is the idle figure) |
+| start → exec-ready | 5.60 s |
+
+Sandbox checks all pass: DHCP address assigned, `sshd` running **and bound to
+loopback only**, git present, work user present, and docker actually runs
+`hello-world` inside the unprivileged container.
+
+So the pool's source of truth works. What remains is the pool itself — keeping N
+of these pre-started and claiming one per `ori new`.
+
 ## Backends
 
 | Backend | State |

@@ -42,7 +42,7 @@ use crate::util::now_ts;
 /// Identity of a warm-pool population: `provider|machine_type|environment_version`.
 /// Each key clones from its own golden snapshot and is drained independently
 /// when that version is superseded.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolKey {
     pub provider: String,
     pub machine_type: MachineType,
@@ -327,7 +327,7 @@ impl PoolManager {
     /// well enough to hand to a different tenant is not a thing to be clever
     /// about. Idempotent: releasing an already-released slot is a no-op.
     pub async fn release(&self, slot_id: &str) -> Result<(), PoolError> {
-        let claimed: Option<(String,)> = sqlx::query_as(
+        let claimed: Option<(i64,)> = sqlx::query_as(
             "SELECT 1 FROM pool_slots WHERE id = ? AND state = 'claimed'",
         )
         .bind(slot_id)
@@ -428,7 +428,7 @@ impl PoolManager {
                 provider: key.provider.clone(),
                 name: snap_ref.clone(),
             };
-            match self.provider.clone_from(&snap, &spec).await {
+            match Provider::clone_from(&*self.provider, &snap, &spec).await {
                 Ok(h) => {
                     // clone_from leaves real clones stopped; the pool only
                     // serves already-started instances.
@@ -569,6 +569,7 @@ impl PoolManager {
             sqlx::query_as("SELECT id, pool_key, instance_handle FROM pool_slots")
                 .fetch_all(&self.db)
                 .await?;
+        let n = rows.len();
         for (id, pk, handle) in rows {
             let key = match PoolKey::parse(&pk) {
                 Ok(k) => k,
@@ -586,7 +587,7 @@ impl PoolManager {
                 .execute(&self.db)
                 .await;
         }
-        Ok(rows.len())
+        Ok(n)
     }
 
     /// Destroy every slot for one key (superseded version). Never reused.
@@ -597,6 +598,7 @@ impl PoolManager {
         .bind(key.key_string())
         .fetch_all(&self.db)
         .await?;
+        let n = rows.len();
         for (id, handle) in rows {
             let _ = self
                 .provider
@@ -610,7 +612,7 @@ impl PoolManager {
                 .execute(&self.db)
                 .await;
         }
-        Ok(rows.len())
+        Ok(n)
     }
 
     /// Which sandboxes currently hold a claim. Reconciliation and tests use
@@ -634,6 +636,5 @@ fn slot_id() -> String {
     format!("orislot_{hex}")
 }
 
-/// `Capabilities` re-export so callers can gate pool behaviour on
-/// `linked_clone` (a provider without linked clones must cold-create instead).
-pub use crate::proto::Capabilities as _PoolCapabilities;
+#[cfg(test)]
+mod tests;

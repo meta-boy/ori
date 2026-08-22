@@ -1,6 +1,21 @@
-# Placeholder manifest — owned by C6 (agent). Replace freely; do not add source
-# here until you own this crate.
 [package]
 name = "ori-agent"
 version.workspace = true
 edition.workspace = true
+description = "Guest agent: outbound control-plane tunnel, exec/detach/status, port host, config injection, setup script. Role: `ori agent` (Linux)."
+
+# Dependency-light on purpose: this crate is baked into every sandbox image as
+# part of the single `ori` binary. It must not pull in `ori-providers` (no
+# Proxmox HTTP client inside a sandbox) and should stay lean enough to
+# cross-compile statically to x86_64-unknown-linux-musl.
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpki-roots"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
