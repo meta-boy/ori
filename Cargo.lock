@@ -1479,6 +1479,7 @@ dependencies = [
  "hex",
  "hmac",
  "http-body-util",
+ "ori-proto",
  "ori-providers",
  "reqwest",
  "serde",

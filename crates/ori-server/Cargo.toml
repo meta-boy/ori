@@ -5,6 +5,7 @@ edition.workspace = true
 description = "Control plane: axum + tokio + sqlx (SQLite, WAL). Role: `ori serve`."
 
 [dependencies]
+ori-proto = { path = "../ori-proto" }
 ori-providers = { path = "../ori-providers" }
 axum = { version = "0.7", features = ["json", "ws"] }
 tokio = { workspace = true }
