@@ -311,6 +311,19 @@ async fn run_create(
         }
     }
 
+    // Hand the sandbox its agent config. Non-fatal: a sandbox without a live
+    // agent still works, it just falls back to the slower provider `exec` and
+    // cannot serve ssh/scp/forward/host. Log loudly rather than failing create,
+    // and never log the config itself - it carries the agent token.
+    if let Err(e) = crate::tunnel::write_agent_config(&state, &id, &handle).await {
+        tracing::warn!(
+            sandbox = %id,
+            error = %e,
+            "could not write the agent config; this sandbox will use the slow exec path \
+             and cannot serve ssh/scp/forward/host"
+        );
+    }
+
     if !emit(
         &tx,
         StreamEvent::State {

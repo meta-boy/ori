@@ -891,3 +891,68 @@ pub async fn authorize_ssh_key(
     }
     Ok(axum::Json(json!({"authorized": true, "user": "work"})))
 }
+
+/// Write a sandbox's agent config so its supervisor can connect.
+///
+/// The golden image ships a supervisor that waits for `/etc/ori/agent.json`,
+/// because a pool member is cloned before it is claimed. This is the other half
+/// of that contract: without it the supervisor waits forever, `exec` silently
+/// takes the slow provider path, and `ssh`/`scp`/`forward`/`host` have no
+/// transport at all.
+///
+/// The payload is base64'd before it crosses the shell. The content is ours, but
+/// it carries a token, and building a shell string around a credential is how
+/// the ssh-key endpoint acquired a command injection — base64 is
+/// `[A-Za-z0-9+/=]` only, so there is nothing to quote or escape.
+pub async fn write_agent_config(
+    state: &AppState,
+    sandbox_id: &str,
+    handle: &crate::proto::InstanceHandle,
+) -> Result<(), String> {
+    let Some(plane_url) = state.config.agent_plane_url.clone() else {
+        return Err("ORI_AGENT_PLANE_URL is not set; the sandbox has no address to dial".into());
+    };
+    let token: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT agent_token FROM sandboxes WHERE id = ?")
+            .bind(sandbox_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| format!("agent token lookup: {e}"))?;
+    let token = token
+        .and_then(|(t,)| t)
+        .ok_or_else(|| "sandbox has no agent token".to_string())?;
+
+    let payload = json!({
+        "controlPlaneUrl": plane_url,
+        "token": token,
+        "sandboxId": sandbox_id,
+        "workDir": "/root/work",
+    })
+    .to_string();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
+
+    // 0600 before the content lands, so the token is never briefly readable.
+    let script = format!(
+        "set -e; mkdir -p /etc/ori /root/work; umask 077; \
+         printf '%s' '{b64}' | base64 -d > /etc/ori/agent.json; \
+         chmod 600 /etc/ori/agent.json; echo wrote"
+    );
+    let req = crate::proto::ExecRequest {
+        cmd: vec!["sh".to_string(), "-c".to_string(), script],
+        cwd: None,
+        timeout_secs: Some(30),
+        env: Default::default(),
+    };
+    let out = state
+        .provider
+        .exec(handle, &req)
+        .await
+        .map_err(|e| format!("writing agent config: {e}"))?;
+    if out.exit_code != 0 {
+        return Err(format!(
+            "writing agent config failed (exit {}): {}",
+            out.exit_code, out.stderr
+        ));
+    }
+    Ok(())
+}

@@ -64,6 +64,14 @@ pub struct Config {
     /// `ORI_WEBHOOK_ALLOW_PRIVATE`.
     pub webhook_allow_private: bool,
 
+    /// WebSocket URL a sandbox's agent dials to reach this control plane.
+    ///
+    /// Cannot be derived from `listen_addr`: binding 0.0.0.0 says nothing about
+    /// which address a sandbox can route to, and the loopback case is the one
+    /// that silently fails. Must be set explicitly for the tunnel to work.
+    /// `ORI_AGENT_PLANE_URL`, e.g. `ws://172.16.12.65:8100/api/v1/agent/tunnel`.
+    pub agent_plane_url: Option<String>,
+
     /// Rootfs footprint per pool slot / sandbox in GB, used by the host
     /// capacity guard exactly as `scripts/preflight.sh` §6 does
     /// (`ORI_POOL_HEADROOM_GB = storage_avail_gb - pool_depth * slot_gb`).
@@ -91,6 +99,7 @@ impl Default for Config {
             pool_depth: 0,
             pool_golden: None,
             webhook_allow_private: false,
+            agent_plane_url: None,
             pool_slot_gb: 8,
             release_base_url: None,
         }
@@ -134,6 +143,11 @@ impl Config {
         if let Ok(v) = std::env::var("ORI_POOL_DEPTH") {
             if let Ok(n) = v.parse::<usize>() {
                 cfg.pool_depth = n;
+            }
+        }
+        if let Ok(v) = std::env::var("ORI_AGENT_PLANE_URL") {
+            if !v.is_empty() {
+                cfg.agent_plane_url = Some(v);
             }
         }
         if let Ok(v) = std::env::var("ORI_WEBHOOK_ALLOW_PRIVATE") {
