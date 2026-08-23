@@ -139,16 +139,29 @@ async fn get_snapshot_row(db: &SqlitePool, account_id: &str, id: &str) -> ApiRes
 /// ~20x slower to clone from. `parent_id` records the snapshot this one is
 /// layered on — set only by named-snapshot replacement, and what `delete`'s
 /// dependent check keys on.
-async fn insert_snapshot_row(
-    db: &SqlitePool,
-    account_id: &str,
-    sandbox_id: &str,
-    name: &str,
-    provider_snapshot: &str,
+/// Named fields rather than eight positional arguments. Two adjacent `bool`s
+/// and a pair of `&str`s that the one caller passes the *same value* for are
+/// exactly the shape that gets silently transposed.
+struct NewSnapshotRow<'a> {
+    account_id: &'a str,
+    sandbox_id: &'a str,
+    name: &'a str,
+    provider_snapshot: &'a str,
     taken_while_stopped: bool,
     is_incremental: bool,
-    parent_id: Option<&str>,
-) -> ApiResult<String> {
+    parent_id: Option<&'a str>,
+}
+
+async fn insert_snapshot_row(db: &SqlitePool, row: NewSnapshotRow<'_>) -> ApiResult<String> {
+    let NewSnapshotRow {
+        account_id,
+        sandbox_id,
+        name,
+        provider_snapshot,
+        taken_while_stopped,
+        is_incremental,
+        parent_id,
+    } = row;
     let id = new_id("orisnap_");
     let now = now_ts();
     sqlx::query(
@@ -435,13 +448,15 @@ pub async fn save_snapshot(
     // `UNIQUE (sandbox_id, name)` constraint.
     let snapshot_id = insert_snapshot_row(
         &state.db,
-        &auth.account_id,
-        &sandbox.id,
-        &snap.name,
-        &snap.name,
-        taken_while_stopped,
-        parent_id.is_some(),
-        parent_id.as_deref(),
+        NewSnapshotRow {
+            account_id: &auth.account_id,
+            sandbox_id: &sandbox.id,
+            name: &snap.name,
+            provider_snapshot: &snap.name,
+            taken_while_stopped,
+            is_incremental: parent_id.is_some(),
+            parent_id: parent_id.as_deref(),
+        },
     )
     .await?;
     upsert_named_snapshot(&state.db, &auth.account_id, &name, &snapshot_id).await?;

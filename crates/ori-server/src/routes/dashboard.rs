@@ -8,6 +8,7 @@ use axum::response::{Html, IntoResponse, Response};
 use crate::state::AppState;
 
 pub async fn page(State(state): State<AppState>) -> Response {
+    let base = format!("http://{}", state.config.listen_addr);
     let page = format!(
         r#"<!doctype html>
 <html lang="en">
@@ -26,7 +27,7 @@ pub async fn page(State(state): State<AppState>) -> Response {
 </body>
 </html>"#,
         domain = state.config.domain,
-        base = format!("http://{}", state.config.listen_addr),
+        base = base,
     );
     Html(page).into_response()
 }
