@@ -158,13 +158,19 @@ pool key = (provider, machine_type, environment_version)
 
 Modelled on measured reality, not on wishful CRIU.
 
-- `stop` = `snapshot` then power off. 3.37 s measured. Keep the disk; do not
-  destroy. Emits `stopping` → `stopped`.
+- `stop` = power off, then `snapshot` the stopped container. ~3.4 s measured.
+  The snapshot is taken **while stopped** — a running-taken snapshot is
+  permanently ~20x slower to clone from (docs/BENCHMARKS.md §Root cause), so
+  every stopped sandbox carries a fast-cloneable snapshot for `fork`. Keep the
+  disk; do not destroy. Emits `stopping` → `stopped`.
 - `resume` = `start` the retained instance. 3.85 s to exec. If the instance is
   gone (host rebuild, capacity move), fall back to `clone_from(latest_snapshot)`.
   Never `rollback` — that path costs ~47 s.
-- `fork` = `snapshot` the source (running is fine) then `clone_from --full 0`
-  then start. ~7 s. Source is untouched.
+- `fork` = `clone_from` the newest **stopped-taken** snapshot, then start.
+  Never snapshot a running source. ~7-9 s. Source is untouched. When the source
+  is running, the fork omits writes made since the last stop; the stream states
+  this in a `notice` event. A running source with no stopped snapshot is refused
+  with a message naming the ~45 s cost instead of paying it.
 - sandbox relocates on resume and its IP changes; ours may too once there is more
   than one node. Do not let anything cache the IP across a stop.
 

@@ -26,11 +26,16 @@ check that `ori-proto` stays dependency-light and I/O-free, and that
 Was **51–52 s**. Root-caused to the *snapshot*, not the clone or the source
 (four-case experiment in `docs/BENCHMARKS.md`): a snapshot taken while the
 container was running is permanently ~20× more expensive to clone from. Fork now
-clones from a stopped-taken snapshot, which `stop` already produces for free.
+clones from the newest stopped-taken snapshot, tracked per snapshot in
+`snapshots.taken_while_stopped` (migration `0003`); `stop` and the TTL reaper
+power off *before* snapshotting so every stopped sandbox carries one.
 
-**Measured end to end through `ori fork` against the real host: 9.1 s.** Data
-inherited, parent unaffected. Slightly over the 7 s target, and the remainder is
-the same cold `start` cost that makes `new` 9.2 s — the warm pool addresses both.
+**Measured end to end through `ori fork` against the real host: 8.5 s from a
+running source, 8.9 s from a stopped one** (was 50.76 s running). Data
+inherited, parent unaffected, and the running-source stream states in a
+`notice` event that writes since the last stop are not in the fork. Slightly
+over the 7 s target, and the remainder is the same cold `start` cost that makes
+`new` 9.2 s — the warm pool addresses both.
 
 ## Corrected: the earlier "rollback poisons the thin pool" claim
 

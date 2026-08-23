@@ -153,8 +153,8 @@ DHCP addresses, verified by `pct list` on the host.
 | `exec` | <=1 s | 2.7 s | over target; uses `pct exec`, not the guest agent |
 | `stop` (snapshot + off) | <=5 s | **4.7 s** PASS | real snapshots confirmed on the host |
 | `resume` | <=4.5 s | **5.4 s** | close; marker file survived |
-| `fork` (source **stopped**) | <=7 s | **8.7 - 9.1 s** | clones the snapshot `stop` already took |
-| `fork` (source **running**) | <=7 s | **50.8 s** | takes a fresh running-taken snapshot - hits the trap |
+| `fork` (source **stopped**) | <=7 s | **8.9 s** | clones the snapshot `stop` already took |
+| `fork` (source **running**) | <=7 s | **8.5 s** | clones the newest stopped-taken snapshot (C12); no fresh live snapshot |
 | `delete` (API returns) | <=1 s | **1.3 s** PASS | async, returns `oriop_...` |
 
 Verified semantics, not just timings:
@@ -185,29 +185,32 @@ Neither is a design flaw; both are unbuilt components, with measured evidence
 that the design reaches target once they exist.
 
 
-## Correction: `fork` only avoids the 45 s trap when the source is stopped
+## C12: `fork` clones a stopped-taken snapshot — the running-source trap is closed
 
-An earlier entry in this document reported fork at 9.1 s and claimed the
-stopped-snapshot rule was implemented. That was measured with the source
-**stopped**, and generalised too far.
+The earlier correction reported fork of a running source at **50.76 s**: `fork`
+took a **fresh** snapshot of the source, which for a running container is
+exactly the running-taken snapshot that costs ~45 s to clone from. Fixed by
+making `fork` clone from the newest **stopped-taken** snapshot (tracked per
+snapshot in `snapshots.taken_while_stopped`, migration `0003`), never
+snapshotting a live source, and making `stop`/the TTL reaper power off *before*
+snapshotting so every stopped sandbox carries a fast-cloneable snapshot.
 
-A natural experiment, same binary, same host, minutes apart:
+Measured on the real host, same binary, through `ori serve --provider proxmox`
+and the real `ori` client, minutes apart:
 
-| sequence | source state at fork | fork |
-|---|---|---|
-| `new -> exec -> stop -> fork` | stopped | **8.68 s** |
-| `new -> exec -> stop -> resume -> fork` | running | **50.76 s** |
+| sequence | source state at fork | fork | child data |
+|---|---|---|---|
+| `new → exec(marker) → stop → fork` | stopped | **8.94 s** | marker present ✅ |
+| `new → exec(marker) → stop → resume → fork` | running | **8.45 s** | marker present ✅ |
 
-So `fork` takes a **fresh** snapshot of the source when it is running, which is
-exactly the running-taken snapshot that costs ~45 s to clone from. The rule was
-derived correctly and is only honoured by accident — when the source happens to
-be stopped and the snapshot `stop` produced is the latest one.
+Both well under the 15 s bar (down from 50.76 s for the running source), and
+the running-source fork stream states the semantic cost in a `notice` event:
+*"writes made since that stop are not in this fork"* — the child inherits the
+filesystem as of the last stop, not writes made since. The parent was verified
+unaffected in both runs (still running, marker still present).
 
-The fix is what the spec already said: fork should clone from **the latest
-stopped-taken snapshot** rather than snapshotting the source on demand. If none
-exists, either stop/snapshot/start the source (~10 s, brief source downtime) or
-report the cost honestly. The semantic price of reusing an older snapshot is that
-writes since the last stop are not in the fork, which must be stated in `ori
-fork`'s output rather than hidden.
+Refusal path: forking a running sandbox that has **no** stopped-taken snapshot
+(e.g. a fresh `new` that was never stopped) is refused with a terminal `error`
+naming the ~45 s cost rather than silently paying it.
 
-**Open. `fork` of a running sandbox does not meet its target.**
+**Closed. `fork` of a running sandbox meets its target.**

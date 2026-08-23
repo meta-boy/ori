@@ -14,8 +14,8 @@ pool enabled:
 | `exec` | 1.9 – 2.7 s | ≤1 s | over — guest agent unreachable |
 | `stop` (snapshot + off) | **3.7 s** | ≤5 s | **met** |
 | `resume` | **4.3 s** | ≤4.5 s | **met** |
-| `fork` (source stopped) | **8.7 s** | ≤7 s | close |
-| `fork` (source running) | **50.8 s** | ≤7 s | **fails — see BENCHMARKS correction** |
+| `fork` (source stopped) | **8.9 s** | ≤7 s | close |
+| `fork` (source running) | **8.5 s** | ≤7 s | close — clones the stopped-taken snapshot (C12); was 50.8 s |
 | `delete` (API returns) | **0.24 – 1.3 s** | ≤1 s | **met** |
 
 Data fidelity verified each run: a marker written before `stop` survived
@@ -37,7 +37,7 @@ LXC containers, confirmed by `pct list` on the host.
 | `ori exec` | **real** | 2.7 s (via `pct exec`; guest agent will cut this) |
 | `ori stop` | **real** | 4.7 s, real snapshot on host |
 | `ori resume` | **real** | 5.4 s, data intact |
-| `ori fork` | **real** | **8.7 s from a stopped source; 50.8 s from a running one** - see correction in BENCHMARKS |
+| `ori fork` | **real** | **8.9 s from a stopped source; 8.5 s from a running one** (clones the stopped-taken snapshot, C12) |
 | `ori delete` | **real** | 1.3 s, async `oriop_…`, container removed |
 | `ori login` / `logout` / `status` | **real** | |
 | `ori serve` / `ori agent` | **real** | one binary, three roles |
