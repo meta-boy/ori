@@ -153,7 +153,7 @@ pub async fn create_webhook(
     auth: Extension<ApiKeyAuth>,
     Json(req): Json<CreateWebhookRequest>,
 ) -> ApiResult<Json<WebhookCreated>> {
-    validate_url(&req.url)?;
+    validate_url_async(&req.url).await?;
     let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM webhooks WHERE account_id = ?")
         .bind(&auth.account_id)
         .fetch_one(&state.db)
@@ -264,14 +264,108 @@ pub async fn remove_webhook(
     Ok(Json(serde_json::json!({})))
 }
 
-fn validate_url(url: &str) -> ApiResult<()> {
-    if url.starts_with("http://") || url.starts_with("https://") {
-        Ok(())
-    } else {
-        Err(ApiError::invalid_request(format!(
-            "webhook url must be http(s)://, got {url:?}"
-        )))
+/// Set to `1` to allow webhook targets on private/loopback addresses.
+///
+/// Off by default. A webhook URL is attacker-controlled input that this server
+/// then fetches, and this server runs next to the hypervisor API — a target of
+/// `http://127.0.0.1:8006` would turn the control plane into a proxy for its
+/// own Proxmox API. But a self-hosted deployment may legitimately want to post
+/// to something on its own network, so it is an explicit opt-in rather than a
+/// hard ban.
+const ALLOW_PRIVATE_ENV: &str = "ORI_WEBHOOK_ALLOW_PRIVATE";
+
+fn allow_private() -> bool {
+    matches!(
+        std::env::var(ALLOW_PRIVATE_ENV).as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+/// Whether an address is safe to fetch from here.
+///
+/// Conservative by construction: anything not clearly a public unicast address
+/// is refused. Rejecting a legitimate target is a config error the operator can
+/// fix; accepting an internal one is an SSRF.
+fn is_public_unicast(ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                // 100.64.0.0/10 carrier-grade NAT
+                || (o[0] == 100 && (64..128).contains(&o[1]))
+                // 192.0.0.0/24 IETF protocol assignments
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                // 198.18.0.0/15 benchmarking
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19)))
+        }
+        IpAddr::V6(v6) => {
+            // An IPv4-mapped address is an IPv4 address wearing a hat.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public_unicast(&IpAddr::V4(v4));
+            }
+            let seg = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                // fe80::/10 link-local
+                || (seg[0] & 0xffc0) == 0xfe80
+                // fc00::/7 unique local
+                || (seg[0] & 0xfe00) == 0xfc00)
+        }
     }
+}
+
+/// Parse a webhook URL and refuse anything we should not fetch.
+///
+/// **Every** resolved address must be public: a hostname with one public and
+/// one loopback answer is a bypass, not a partial pass.
+async fn validate_url_async(url: &str) -> ApiResult<()> {
+    let parsed = url::Url::parse(url)
+        .map_err(|e| ApiError::invalid_request(format!("webhook url is not a url: {e}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(ApiError::invalid_request(format!(
+            "webhook url must be http(s)://, got {:?}",
+            parsed.scheme()
+        )));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| ApiError::invalid_request("webhook url has no host"))?
+        .to_string();
+    if allow_private() {
+        tracing::warn!(
+            host = %host,
+            "{ALLOW_PRIVATE_ENV} is set: webhook targets on private addresses are permitted"
+        );
+        return Ok(());
+    }
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| ApiError::invalid_request(format!("cannot resolve {host}: {e}")))?
+        .collect();
+    if addrs.is_empty() {
+        return Err(ApiError::invalid_request(format!(
+            "{host} resolved to no addresses"
+        )));
+    }
+    for a in &addrs {
+        if !is_public_unicast(&a.ip()) {
+            return Err(ApiError::invalid_request(format!(
+                "webhook target {host} resolves to {} which is not a public address; \
+                 set {ALLOW_PRIVATE_ENV}=1 to allow internal targets",
+                a.ip()
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -450,8 +544,17 @@ async fn deliver(row: &DeliveryRow) -> (bool, Option<String>) {
     mac.update(msg.as_bytes());
     let sig = hex::encode(mac.finalize().into_bytes());
 
+    // Re-validate at delivery time, not just at registration: DNS can change
+    // between the two (rebinding), so the check that matters is the one taken
+    // immediately before the request.
+    if let Err(e) = validate_url_async(&row.url).await {
+        return (false, Some(format!("refusing to deliver: {e:?}")));
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        // A public URL that 302s to 127.0.0.1 is the same attack, so do not
+        // follow redirects at all.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .ok();
     let Some(client) = client else {
@@ -516,4 +619,52 @@ pub fn spawn_sweeper(state: AppState) {
             attempt_due_deliveries(&state).await;
         }
     });
+}
+
+#[cfg(test)]
+mod ssrf_tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    /// The addresses that made the scheme-only check exploitable. This server
+    /// runs beside the Proxmox API on loopback, so `http://127.0.0.1:8006`
+    /// would have made it a proxy for its own hypervisor.
+    #[test]
+    fn internal_addresses_are_refused() {
+        for s in [
+            "127.0.0.1", // the hypervisor API lives here
+            "::1",
+            "0.0.0.0",
+            "169.254.169.254", // cloud instance metadata
+            "10.0.0.5",
+            "172.16.12.65", // this project's own sandbox bridge
+            "192.168.1.10",
+            "100.64.0.1",       // carrier-grade NAT
+            "fe80::1",          // link-local
+            "fc00::1",          // unique local
+            "::ffff:127.0.0.1", // IPv4-mapped loopback
+        ] {
+            let ip: IpAddr = s.parse().unwrap();
+            assert!(!is_public_unicast(&ip), "{s} must be refused");
+        }
+    }
+
+    #[test]
+    fn public_addresses_are_allowed() {
+        for s in ["1.1.1.1", "93.184.216.34", "2606:4700:4700::1111"] {
+            let ip: IpAddr = s.parse().unwrap();
+            assert!(is_public_unicast(&ip), "{s} must be allowed");
+        }
+    }
+
+    #[tokio::test]
+    async fn loopback_url_is_rejected_at_registration() {
+        // Only meaningful with the opt-out unset, which is the default.
+        std::env::remove_var(ALLOW_PRIVATE_ENV);
+        assert!(validate_url_async("http://127.0.0.1:8006/api2/json")
+            .await
+            .is_err());
+        assert!(validate_url_async("ftp://example.com/x").await.is_err());
+        assert!(validate_url_async("not a url").await.is_err());
+    }
 }
