@@ -153,7 +153,7 @@ pub async fn create_webhook(
     auth: Extension<ApiKeyAuth>,
     Json(req): Json<CreateWebhookRequest>,
 ) -> ApiResult<Json<WebhookCreated>> {
-    validate_url_async(&req.url).await?;
+    validate_url_async(&req.url, state.config.webhook_allow_private).await?;
     let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM webhooks WHERE account_id = ?")
         .bind(&auth.account_id)
         .fetch_one(&state.db)
@@ -274,13 +274,6 @@ pub async fn remove_webhook(
 /// hard ban.
 const ALLOW_PRIVATE_ENV: &str = "ORI_WEBHOOK_ALLOW_PRIVATE";
 
-fn allow_private() -> bool {
-    matches!(
-        std::env::var(ALLOW_PRIVATE_ENV).as_deref(),
-        Ok("1") | Ok("true") | Ok("yes")
-    )
-}
-
 /// Whether an address is safe to fetch from here.
 ///
 /// Conservative by construction: anything not clearly a public unicast address
@@ -326,7 +319,7 @@ fn is_public_unicast(ip: &std::net::IpAddr) -> bool {
 ///
 /// **Every** resolved address must be public: a hostname with one public and
 /// one loopback answer is a bypass, not a partial pass.
-async fn validate_url_async(url: &str) -> ApiResult<()> {
+async fn validate_url_async(url: &str, allow_private: bool) -> ApiResult<()> {
     let parsed = url::Url::parse(url)
         .map_err(|e| ApiError::invalid_request(format!("webhook url is not a url: {e}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -339,7 +332,7 @@ async fn validate_url_async(url: &str) -> ApiResult<()> {
         .host_str()
         .ok_or_else(|| ApiError::invalid_request("webhook url has no host"))?
         .to_string();
-    if allow_private() {
+    if allow_private {
         tracing::warn!(
             host = %host,
             "{ALLOW_PRIVATE_ENV} is set: webhook targets on private addresses are permitted"
@@ -486,7 +479,7 @@ pub async fn attempt_one(state: &AppState, delivery_id: &str) {
         return;
     };
 
-    let (ok, err) = deliver(&row).await;
+    let (ok, err) = deliver(&row, state.config.webhook_allow_private).await;
     let attempts = row.attempts + 1;
     let res = if ok {
         sqlx::query(
@@ -537,7 +530,7 @@ fn backoff(attempts: i64) -> i64 {
 /// the body (`sha256=HMAC(secret, "{ts}.{body}")`), so a replayed request —
 /// one with a stale `X-Ori-Timestamp` — no longer verifies unless the attacker
 /// can produce a fresh signature, which requires the secret.
-async fn deliver(row: &DeliveryRow) -> (bool, Option<String>) {
+async fn deliver(row: &DeliveryRow, allow_private: bool) -> (bool, Option<String>) {
     let ts = chrono::Utc::now().timestamp();
     let msg = format!("{ts}.{}", row.payload);
     let mut mac = HmacSha256::new_from_slice(row.secret.as_bytes()).expect("hmac key is valid");
@@ -547,7 +540,7 @@ async fn deliver(row: &DeliveryRow) -> (bool, Option<String>) {
     // Re-validate at delivery time, not just at registration: DNS can change
     // between the two (rebinding), so the check that matters is the one taken
     // immediately before the request.
-    if let Err(e) = validate_url_async(&row.url).await {
+    if let Err(e) = validate_url_async(&row.url, allow_private).await {
         return (false, Some(format!("refusing to deliver: {e:?}")));
     }
     let client = reqwest::Client::builder()
@@ -659,12 +652,16 @@ mod ssrf_tests {
 
     #[tokio::test]
     async fn loopback_url_is_rejected_at_registration() {
-        // Only meaningful with the opt-out unset, which is the default.
-        std::env::remove_var(ALLOW_PRIVATE_ENV);
-        assert!(validate_url_async("http://127.0.0.1:8006/api2/json")
+        assert!(validate_url_async("http://127.0.0.1:8006/api2/json", false)
             .await
             .is_err());
-        assert!(validate_url_async("ftp://example.com/x").await.is_err());
-        assert!(validate_url_async("not a url").await.is_err());
+        assert!(validate_url_async("ftp://example.com/x", false)
+            .await
+            .is_err());
+        assert!(validate_url_async("not a url", false).await.is_err());
+        // The opt-in is what a legitimate internal target needs.
+        assert!(validate_url_async("http://127.0.0.1:9/hook", true)
+            .await
+            .is_ok());
     }
 }

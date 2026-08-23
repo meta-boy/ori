@@ -39,6 +39,7 @@ async fn test_app() -> TestApp {
     let config = Config {
         domain: "ori.test".to_string(),
         default_ttl_seconds: 900,
+        webhook_allow_private: true,
         ..Config::default()
     };
     let app = ori_server::build_app(db.clone(), provider.clone(), config);
@@ -340,6 +341,7 @@ async fn test_app_with_pool() -> TestApp {
     let config = Config {
         domain: "ori.test".to_string(),
         pool_depth: 1,
+        webhook_allow_private: true,
         ..Config::default()
     };
     let app = ori_server::build_app(db.clone(), provider.clone(), config);
@@ -1698,6 +1700,7 @@ async fn ndjson_is_flushed_per_line_not_buffered() {
     let provider = Arc::new(MockProvider::new().with_create_delay(Duration::from_millis(1200)));
     let config = Config {
         domain: "ori.test".into(),
+        webhook_allow_private: true,
         ..Config::default()
     };
     let app = ori_server::build_app(db.clone(), provider.clone(), config);
@@ -2374,6 +2377,7 @@ async fn cli_version_reads_the_latest_json_contract() {
     let config = Config {
         domain: "ori.test".to_string(),
         release_base_url: Some(base.display().to_string()),
+        webhook_allow_private: true,
         ..Config::default()
     };
     let app = ori_server::build_app(db.clone(), provider.clone(), config);

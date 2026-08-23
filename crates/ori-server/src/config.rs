@@ -55,6 +55,15 @@ pub struct Config {
     /// `ORI_POOL_GOLDEN` env / `--pool-golden` flag.
     pub pool_golden: Option<String>,
 
+    /// Allow webhook targets on private/loopback addresses.
+    ///
+    /// Off by default: a webhook url is attacker-controlled input this server
+    /// then fetches, and it runs beside the hypervisor API on loopback. Config
+    /// rather than a process-global env read, so a test can inject it without
+    /// racing other tests.
+    /// `ORI_WEBHOOK_ALLOW_PRIVATE`.
+    pub webhook_allow_private: bool,
+
     /// Rootfs footprint per pool slot / sandbox in GB, used by the host
     /// capacity guard exactly as `scripts/preflight.sh` §6 does
     /// (`ORI_POOL_HEADROOM_GB = storage_avail_gb - pool_depth * slot_gb`).
@@ -81,6 +90,7 @@ impl Default for Config {
             default_ttl_seconds: 900,
             pool_depth: 0,
             pool_golden: None,
+            webhook_allow_private: false,
             pool_slot_gb: 8,
             release_base_url: None,
         }
@@ -125,6 +135,9 @@ impl Config {
             if let Ok(n) = v.parse::<usize>() {
                 cfg.pool_depth = n;
             }
+        }
+        if let Ok(v) = std::env::var("ORI_WEBHOOK_ALLOW_PRIVATE") {
+            cfg.webhook_allow_private = matches!(v.as_str(), "1" | "true" | "yes");
         }
         if let Ok(v) = std::env::var("ORI_POOL_GOLDEN") {
             if !v.is_empty() {
