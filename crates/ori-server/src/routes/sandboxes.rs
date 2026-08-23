@@ -1007,10 +1007,10 @@ pub async fn exec_sandbox(
             ExecResult {
                 pid: g("pid").as_i64().unwrap_or(0),
                 completed: g("completed").as_bool().unwrap_or(false),
-                exit_code: g("exitCode").as_i64().unwrap_or(-1),
+                exit_code: g("exit_code").as_i64().unwrap_or(-1),
                 stdout: g("stdout").as_str().unwrap_or_default().to_string(),
                 stderr: g("stderr").as_str().unwrap_or_default().to_string(),
-                duration_ms: g("durationMs").as_i64().unwrap_or(0),
+                duration_ms: g("duration_ms").as_i64().unwrap_or(0),
             }
         }
         None => state

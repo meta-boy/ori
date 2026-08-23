@@ -320,6 +320,29 @@ mod tests {
         assert_eq!(a.len(), "orit_".len() + 48);
     }
 
+    /// The agent's frame enums carry `#[serde(tag = "type", rename_all =
+    /// "camelCase")]`, which renames **variants** and leaves struct fields
+    /// snake_case. Reading `exitCode` instead of `exit_code` silently yields
+    /// defaults — a successful command reported as exit -1 with no output.
+    /// That is the same failure as the `memoryGb`/`memoryGB` outage, so the
+    /// literal frame is pinned here rather than trusted to memory.
+    #[test]
+    fn exec_result_frame_uses_snake_case_fields() {
+        let frame: Value = serde_json::from_str(
+            r#"{"type":"execResult","id":"req_1","pid":42,"completed":true,
+                "exit_code":0,"duration_ms":17,"timed_out":false,
+                "detached":false,"stdout":"hi\n","stderr":""}"#,
+        )
+        .unwrap();
+        assert_eq!(frame.get("exit_code").and_then(|v| v.as_i64()), Some(0));
+        assert_eq!(frame.get("duration_ms").and_then(|v| v.as_i64()), Some(17));
+        assert!(
+            frame.get("exitCode").is_none(),
+            "camelCase would mean the agent contract changed; update the reader too"
+        );
+        assert!(frame.get("durationMs").is_none());
+    }
+
     #[tokio::test]
     async fn request_returns_none_without_a_tunnel() {
         let reg = AgentRegistry::new();

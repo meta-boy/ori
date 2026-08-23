@@ -1044,6 +1044,7 @@ async fn ttl_reaper_stops_expired_sandboxes_once() {
         provider: t.provider.clone(),
         config: Default::default(),
         pool: None,
+        agents: ori_server::tunnel::AgentRegistry::new(),
     };
     tasks::reap_expired(&state).await.unwrap();
 
@@ -1077,6 +1078,7 @@ async fn reconciler_marks_drift_error_and_destroys_orphans() {
         provider: t.provider.clone(),
         config: Default::default(),
         pool: None,
+        agents: ori_server::tunnel::AgentRegistry::new(),
     };
 
     // 1. drift: provider says the instance is gone -> sandbox goes to error
@@ -1133,6 +1135,7 @@ async fn reconcile_does_not_demote_a_healthy_ready_sandbox() {
         provider: t.provider.clone(),
         config: Default::default(),
         pool: None,
+        agents: ori_server::tunnel::AgentRegistry::new(),
     };
     tasks::reconcile_once(&state).await.unwrap();
 
