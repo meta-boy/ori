@@ -150,7 +150,8 @@ DHCP addresses, verified by `pct list` on the host.
 |---|---|---|---|
 | `new` (**warm pool hit**) | <=1.5 s | **1.44 - 1.50 s** PASS | claims a pre-started container |
 | `new` (cold, pool miss) | <=7 s | 8.8 - 9.5 s | template create + start + DHCP |
-| `exec` | <=1 s | 2.7 s | over target; uses `pct exec`, not the guest agent |
+| `exec` (**guest agent tunnel**) | <=1 s | **0.11 s** PASS | persistent WebSocket, no per-call handshake |
+| `exec` (provider fallback) | <=1 s | 2.7 s | `pct exec` over SSH, one handshake per call |
 | `stop` (snapshot + off) | <=5 s | **4.7 s** PASS | real snapshots confirmed on the host |
 | `resume` | <=4.5 s | **5.4 s** | close; marker file survived |
 | `fork` (source **stopped**) | <=7 s | **8.9 s** | clones the snapshot `stop` already took |
@@ -176,10 +177,23 @@ signature), and `exec` into the claimed sandbox returned a real container.
 The cold path remains ~9 s and is what a pool miss costs; the miss emits
 `cloning` so it is visible rather than merely slow.
 
-**`exec` at 2.7 s vs the 0.90 s floor.** Exec shells out through `pct exec` over
-SSH instead of the guest agent (`plans/C6`, unimplemented). `pct exec` alone
-measured 0.90 s, so the overhead is one SSH round trip per call. The guest
-agent's persistent outbound tunnel removes it.
+**`exec`: closed, and it beat the target by 9x.** The guest-agent tunnel landed
+and `exec` measures **0.11 s**, against a 1 s target and the 2.7 s provider path.
+The overhead removed was one SSH handshake per call; a persistent WebSocket has
+none. Verified end to end with a real musl agent inside a real LXC on the
+Proxmox host, control plane running on the host:
+
+| check | result |
+|---|---|
+| stdout | `TUNNEL_OK\nx86_64\n` |
+| exit code 42 | propagated as 42 |
+| exit 3 + stderr | `exitCode: 3`, `stderr: "oops\n"` |
+| 9 KB output (multi-chunk) | 9000 bytes intact |
+| reported duration | 1-7 ms (was always 0 before the fix) |
+| round trip | 0.11 s, three consecutive runs |
+
+The provider path remains as the fallback for a sandbox with no live tunnel, and
+the response shape is identical either way, so a caller can only tell by latency.
 
 Neither is a design flaw; both are unbuilt components, with measured evidence
 that the design reaches target once they exist.

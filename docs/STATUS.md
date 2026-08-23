@@ -11,7 +11,7 @@ pool enabled:
 |---|---|---|---|
 | `new` (warm pool hit) | **0.42 – 1.50 s** | ≤1.5 s | **met** |
 | `new` (cold / pool miss) | ~8.8 s | ≤7 s | over |
-| `exec` | 1.9 – 2.7 s | ≤1 s | over — guest agent unreachable |
+| `exec` | **0.11 s** | ≤1 s | **met** — via the guest-agent tunnel |
 | `stop` (snapshot + off) | **3.7 s** | ≤5 s | **met** |
 | `resume` | **4.3 s** | ≤4.5 s | **met** |
 | `fork` (source stopped) | **8.9 s** | ≤7 s | close |
@@ -34,7 +34,7 @@ LXC containers, confirmed by `pct list` on the host.
 | `ori new` | **real** | **1.44 s warm-pool hit**, ~9 s cold miss |
 | `ori list` | **real** | |
 | `ori info` | **real** | |
-| `ori exec` | **real** | 2.7 s (via `pct exec`; guest agent will cut this) |
+| `ori exec` | **real** | **0.11 s** via the agent tunnel; 2.7 s provider fallback |
 | `ori stop` | **real** | 4.7 s, real snapshot on host |
 | `ori resume` | **real** | 5.4 s, data intact |
 | `ori fork` | **real** | **8.9 s from a stopped source; 8.5 s from a running one** (clones the stopped-taken snapshot, C12) |
@@ -130,8 +130,12 @@ of these pre-started and claiming one per `ori new`.
 - ~~Warm pool not built~~ **RESOLVED.** The pool fills and `ori new` claims a
   warm slot in 1.44 s (target 1.5 s, was 9.2 s). Enable with
   `--pool-depth N --pool-golden <node>/<vmid>/<snapname>`.
-- **`exec` goes over SSH per call.** 2.7 s vs a 0.90 s `pct exec` floor; the
-  guest agent's persistent tunnel removes the per-call handshake.
+- ~~`exec` goes over SSH per call~~ **RESOLVED.** The agent tunnel landed;
+  `exec` is 0.11 s, verified with a real agent in a real LXC. The provider path
+  stays as the fallback when a sandbox has no live tunnel.
+- **The agent does not start by itself yet.** The tunnel was verified by pushing
+  the binary and config in by hand, so a sandbox created by `ori new` currently
+  has no agent and silently takes the 2.7 s fallback. `plans/C25` closes this.
 - **~1,200 lines of duplicated wire types** across `ori-server/src/proto.rs` and
   `ori-cli/src/wire.rs` while `ori-proto` is a placeholder. This already caused
   one production failure (`memoryGb` vs `memoryGB`). See `docs/CODE-REVIEW.md`.
