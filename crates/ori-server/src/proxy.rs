@@ -335,7 +335,12 @@ mod tests {
 
     #[test]
     fn finds_the_head_terminator() {
-        assert_eq!(find_head_end(b"HTTP/1.1 200 OK\r\n\r\nbody"), Some(17));
+        // "HTTP/1.1 200 OK" is 15 bytes, so the terminator starts at 15 and
+        // the body begins at split + 4.
+        let buf = b"HTTP/1.1 200 OK\r\n\r\nbody";
+        let split = find_head_end(buf).expect("terminator");
+        assert_eq!(split, 15);
+        assert_eq!(&buf[split + 4..], b"body");
         assert_eq!(find_head_end(b"HTTP/1.1 200 OK\r\n"), None);
     }
 
