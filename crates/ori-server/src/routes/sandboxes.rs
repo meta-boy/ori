@@ -19,7 +19,7 @@ use crate::pool::{ClaimResult, PoolKey};
 use crate::proto::{
     BoxState, Commands, CreateSandboxRequest, ExecRequest, ExecRequestBody, ExecResponse,
     ExecResult, ExtendResponse, ExtendSandboxRequest, ForkSandboxRequest, HostCapacity,
-    InstanceHandle, InstanceSpec, MachineType, PageInfo, ResumeSandboxRequest, Sandbox,
+    InstanceHandle, InstanceSpec, MachineType, PageInfo, Provider, ResumeSandboxRequest, Sandbox,
     SandboxDetail, SandboxList, SnapshotRef, StopMode, StopSandboxRequest, StreamEvent, TypedId,
 };
 use crate::repo::{self, SandboxRow};
@@ -237,7 +237,38 @@ async fn run_create(
     }
     let _ = repo::transition(&state.db, &id, &["provisioning"], BoxState::Cloning).await;
 
-    let handle = match state.provider.create(&spec).await {
+    // Prefer cloning the golden over creating from the distro template.
+    //
+    // `provider.create` builds from the raw template tarball, which yields a
+    // bare container: no sshd, no docker, no work user, no agent. Everything a
+    // sandbox is expected to have is provisioned into the golden image, so a
+    // template-created sandbox cannot serve `ssh`, `desktop`, or an agent
+    // tunnel - it only looked fine while the pool was in play, because pool
+    // members are clones of the golden.
+    //
+    // Cloning is also faster than the template path (~2.4 s against ~6.4 s),
+    // so this is not a trade.
+    let golden = state.config.pool_golden.clone();
+    let created = match &golden {
+        Some(reference) => {
+            let snap = SnapshotRef {
+                provider: state.provider.name().to_string(),
+                name: reference.clone(),
+            };
+            // Explicit trait call: `state.provider` is an `Arc`, so plain
+            // method syntax resolves to `Clone::clone_from` instead of this.
+            Provider::clone_from(&*state.provider, &snap, &spec).await
+        }
+        None => {
+            tracing::warn!(
+                sandbox = %id,
+                "no golden configured (--pool-golden); creating from the distro template, \
+                 which produces a sandbox without sshd, docker or an agent"
+            );
+            state.provider.create(&spec).await
+        }
+    };
+    let handle = match created {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(sandbox = %id, error = %e, "create: provider create failed");
