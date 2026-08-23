@@ -207,8 +207,12 @@ of these pre-started and claiming one per `ori new`.
 - **VMID allocation** should consult the live node's vmid list, not only our
   counter and `/cluster/nextid`.
 - **Self-signed PVE certs** need `ORI_PVE_INSECURE=1` or a CA file.
-- **54 `unwrap()`/`expect()`** in non-test code; in a control plane those are
-  crashes that take in-flight operations down.
+- **103 `unwrap()`/`expect()`** outside `#[cfg(test)]` modules; in a control
+  plane those are crashes that take in-flight operations down. This said 54 for
+  a long time and was simply stale -- the count grew with the code. Current
+  breakdown: `ori-server` 68, `ori-agent` 23, `ori-cli` 7, `ori-providers` 3,
+  `ori-proto` 2. The server figure is the one that matters: those run on the
+  request path.
 
 ## Tests
 
