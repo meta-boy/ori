@@ -647,6 +647,7 @@ pub async fn fork_sandbox(
         no_env: None,
         environment: None,
         team: None,
+        no_stop: None,
     });
     tokio::spawn(async move {
         run_fork(state2, account_id, row, req, tx).await;
@@ -764,57 +765,77 @@ async fn run_fork(
             }
             snap
         }
-        // No stopped-taken snapshot. If the source is running, snapshotting it
-        // now would produce exactly the ~45 s-slow snapshot the rule exists to
-        // avoid — so refuse and name the cost instead of silently paying it.
-        // (If the source is stopped, a fresh snapshot is safe: taken while
-        // stopped, fast to clone from.)
+        // No stopped-taken snapshot. A fresh snapshot of a *stopped* source is
+        // safe (taken while stopped, fast to clone from). A running source is
+        // the common case — create, work, fork — and cannot be snapshot cheaply,
+        // so fork stops it, snapshots it stopped, restarts it, then clones.
+        // `--no-stop` keeps the old refusal for anyone who cannot take the
+        // downtime.
         _ => {
             if source_running {
-                let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
-                let _ = emit(
-                    &tx,
-                    StreamEvent::Error {
-                        id: child_id.clone(),
-                        code: "invalid_request".into(),
-                        message: format!(
-                            "cannot fork a running sandbox that has no stopped snapshot: \
-                             snapshotting a live container makes the clone ~45 s slower. \
-                             Stop the source first (`ori stop {}`), then fork",
-                            source.id
-                        ),
-                    },
-                );
-                return;
-            }
-            match state
-                .provider
-                .snapshot(&source_handle, &crate::util::snapshot_name("fork"))
-                .await
-            {
-                Ok(s) => {
-                    let _ = repo::insert_snapshot(
-                        &state.db,
-                        &source.account_id,
-                        &source.id,
-                        "fork",
-                        &s.name,
-                        true,
-                    )
-                    .await;
-                    s
-                }
-                Err(e) => {
+                if req.no_stop.unwrap_or(false) {
                     let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
                     let _ = emit(
                         &tx,
                         StreamEvent::Error {
                             id: child_id.clone(),
-                            code: "provider_unavailable".into(),
-                            message: e.to_string(),
+                            code: "invalid_request".into(),
+                            message: format!(
+                                "cannot fork a running sandbox that has no stopped snapshot \
+                                 (--no-stop): fork refuses rather than stopping {} to take a \
+                                 fast snapshot (it would be restarted afterwards). Omit \
+                                 --no-stop, or stop the source first (`ori stop {}`), then fork",
+                                source.id, source.id
+                            ),
                         },
                     );
                     return;
+                }
+                match stop_snapshot_restart_for_fork(&state, &source, &tx, &child_id).await {
+                    Ok(s) => s,
+                    Err((code, message)) => {
+                        let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+                        let _ = emit(
+                            &tx,
+                            StreamEvent::Error {
+                                id: child_id.clone(),
+                                code,
+                                message,
+                            },
+                        );
+                        return;
+                    }
+                }
+            } else {
+                match state
+                    .provider
+                    .snapshot(&source_handle, &crate::util::snapshot_name("fork"))
+                    .await
+                {
+                    Ok(s) => {
+                        let _ = repo::insert_snapshot(
+                            &state.db,
+                            &source.account_id,
+                            &source.id,
+                            "fork",
+                            &s.name,
+                            true,
+                        )
+                        .await;
+                        s
+                    }
+                    Err(e) => {
+                        let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+                        let _ = emit(
+                            &tx,
+                            StreamEvent::Error {
+                                id: child_id.clone(),
+                                code: "provider_unavailable".into(),
+                                message: e.to_string(),
+                            },
+                        );
+                        return;
+                    }
                 }
             }
         }
@@ -909,6 +930,123 @@ async fn run_fork(
             commands: commands_for(&child_id),
         },
     );
+}
+
+/// C24: the common path — create, work, fork. A running source that has never
+/// been stopped carries no stopped-taken snapshot, and a fresh snapshot of a
+/// live container is permanently ~20x slower to clone from. So fork stops the
+/// source, snapshots it while stopped (the fast-cloneable kind), restarts it,
+/// then returns the snapshot for the caller to clone. Two rules are load
+/// bearing:
+///
+/// - The downtime is **announced on the stream before the stop**, because a
+///   user whose shell drops mid-fork with no warning reads it as a crash.
+/// - The source is **restarted before cloning**, so a failed fork — a failed
+///   clone, a failed snapshot, a failed stop — never leaves the user's sandbox
+///   powered off. Every path out of this function has the source back up.
+///
+/// Returns `Err((code, message))` for the terminal stream event; the source
+/// has been restarted in that case too.
+async fn stop_snapshot_restart_for_fork(
+    state: &AppState,
+    source: &SandboxRow,
+    tx: &mpsc::UnboundedSender<Bytes>,
+    child_id: &str,
+) -> Result<SnapshotRef, (String, String)> {
+    // Announce the downtime BEFORE it happens. A client that is gone by now
+    // gets no fork and the source stays up — nobody is listening to be warned,
+    // so stopping a running sandbox on their behalf would be a surprise.
+    if !emit(
+        tx,
+        StreamEvent::Notice {
+            id: child_id.to_string(),
+            message: format!(
+                "{} has never been stopped, so it has no fast snapshot; \
+                 stopping it for a moment to take one for this fork, then restarting it",
+                source.id
+            ),
+        },
+    ) {
+        return Err(("internal".into(), "client disconnected".into()));
+    }
+
+    let handle = InstanceHandle {
+        provider: source.provider.clone(),
+        id: source.provider_handle.clone(),
+    };
+
+    // Stop the source. The DB is moved to `stopping` first so the reconciler
+    // never sees a `ready` sandbox the provider reports as stopped.
+    let _ = repo::transition(
+        &state.db,
+        &source.id,
+        &["ready", "running", "idle"],
+        BoxState::Stopping,
+    )
+    .await;
+    if let Err(e) = state.provider.stop(&handle, StopMode::Force).await {
+        // The stop may have half-applied; bring the source back up regardless
+        // before reporting the fork failed.
+        restart_source_after_fork(state, source).await;
+        return Err((
+            "provider_unavailable".into(),
+            format!("fork: cannot stop {} to snapshot it: {e}", source.id),
+        ));
+    }
+    let _ = repo::set_state(&state.db, &source.id, BoxState::Stopped).await;
+
+    // Snapshot while stopped — the fast-cloneable kind.
+    let snap = match state
+        .provider
+        .snapshot(&handle, &crate::util::snapshot_name("fork"))
+        .await
+    {
+        Ok(s) => {
+            let _ = repo::insert_snapshot(
+                &state.db,
+                &source.account_id,
+                &source.id,
+                "fork",
+                &s.name,
+                true,
+            )
+            .await;
+            s
+        }
+        Err(e) => {
+            restart_source_after_fork(state, source).await;
+            return Err((
+                "provider_unavailable".into(),
+                format!("fork: cannot snapshot {}: {e}", source.id),
+            ));
+        }
+    };
+
+    // Restart the source before the caller clones from the snapshot: the clone
+    // only needs the snapshot, and restarting first means the source is back up
+    // even if the clone itself fails.
+    restart_source_after_fork(state, source).await;
+    Ok(snap)
+}
+
+/// Start the source and move it back to `ready`. On a provider failure the
+/// sandbox is marked `error` rather than silently left powered off. Used by
+/// the fork path, which must never leave the source down.
+async fn restart_source_after_fork(state: &AppState, source: &SandboxRow) {
+    let handle = InstanceHandle {
+        provider: source.provider.clone(),
+        id: source.provider_handle.clone(),
+    };
+    let _ = repo::set_state(&state.db, &source.id, BoxState::Provisioning).await;
+    match state.provider.start(&handle).await {
+        Ok(()) => {
+            let _ = repo::set_state(&state.db, &source.id, BoxState::Ready).await;
+        }
+        Err(e) => {
+            tracing::warn!(sandbox = %source.id, error = %e, "fork: restarting source failed");
+            let _ = repo::set_state(&state.db, &source.id, BoxState::Error).await;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

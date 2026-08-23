@@ -117,6 +117,7 @@ fn lifecycle_help_covers_spec() {
                 "--env",
                 "--no-env",
                 "--environment",
+                "--no-stop",
             ],
         ),
         (&["extend"], &["--hours", "--ttl", "--no-auto-stop"]),

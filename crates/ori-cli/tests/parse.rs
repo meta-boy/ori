@@ -103,7 +103,12 @@ fn resume_and_fork_share_flags() {
             assert!(a.opts.no_auto_stop);
             assert_eq!(a.opts.env, vec!["K=V"]);
             assert_eq!(a.opts.environment.as_deref(), Some("base"));
+            assert!(!a.no_stop);
         }
+        other => panic!("expected fork, got {other:?}"),
+    }
+    match parse(&["fork", "ori_x", "--no-stop"]).command {
+        Command::Fork(a) => assert!(a.no_stop),
         other => panic!("expected fork, got {other:?}"),
     }
 }

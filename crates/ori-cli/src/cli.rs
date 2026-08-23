@@ -210,6 +210,10 @@ pub struct ForkArgs {
     pub id: String,
     #[command(flatten)]
     pub opts: ResumeOptions,
+    /// Refuse a running source with no stopped snapshot instead of stopping,
+    /// snapshotting and restarting it (the fork's default downtime)
+    #[arg(long)]
+    pub no_stop: bool,
 }
 
 #[derive(Debug, Args)]

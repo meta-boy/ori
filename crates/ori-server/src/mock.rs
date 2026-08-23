@@ -36,6 +36,9 @@ pub struct MockProvider {
     /// When set, the next `create` fails with `Unavailable` — used to test
     /// the error event on the NDJSON stream.
     pub fail_next_create: AtomicBool,
+    /// When set, the next `clone_from` fails with `Unavailable` — used to test
+    /// that a failed fork still restarts the source.
+    pub fail_next_clone: AtomicBool,
     next_seq: AtomicU64,
     next_pid: AtomicU64,
 }
@@ -50,6 +53,7 @@ impl MockProvider {
             }),
             create_delay: Duration::ZERO,
             fail_next_create: AtomicBool::new(false),
+            fail_next_clone: AtomicBool::new(false),
             next_seq: AtomicU64::new(1),
             next_pid: AtomicU64::new(1000),
         }
@@ -131,6 +135,11 @@ impl Provider for MockProvider {
         _src: &SnapshotRef,
         _spec: &InstanceSpec,
     ) -> Result<InstanceHandle, ProviderError> {
+        if self.fail_next_clone.swap(false, Ordering::SeqCst) {
+            return Err(ProviderError::Unavailable(
+                "mock provider configured to fail clone".into(),
+            ));
+        }
         let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
         self.register(seq);
         Ok(self.handle_for(seq))

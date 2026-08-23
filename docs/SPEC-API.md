@@ -60,9 +60,20 @@ in the fork; that is stated on the stream so it is never a silent omission.
 {"event":"notice","id":"ori_<child>","message":"forked from the snapshot taken when ori_<src> was last stopped; writes made since that stop are not in this fork"}
 ```
 
-`fork` refuses (terminal `error`, code `invalid_request`) when the source is
-running but has no stopped snapshot, naming the ~45 s cost of snapshotting a
-live container instead of paying it.
+A running source with **no** stopped snapshot is the common path (`new`, work,
+`fork`). Fork then stops the source, snapshots it **while stopped** (the fast
+kind), restarts it, and clones — roughly 10 s total with a few seconds of
+source downtime. The downtime is **announced on the stream before the stop**
+(`notice`), and the source is restarted before cloning, so a failed fork never
+leaves it powered off:
+
+```
+{"event":"notice","id":"ori_<child>","message":"ori_<src> has never been stopped, so it has no fast snapshot; stopping it for a moment to take one for this fork, then restarting it"}
+```
+
+`noStop: true` (`ori fork --no-stop`) opts out of the downtime: the source is
+refused instead (terminal `error`, code `invalid_request`), keeping the old
+behaviour for anyone who cannot take it.
 
 ## Sandbox object
 
@@ -114,7 +125,7 @@ Default list filter is `r`; `--all` is `rspte`.
 new      init → provisioning → cloning → ready
 stop     ready → stopping → [snapshot] → stopped
 resume   stopped → provisioning → ready
-fork     source untouched; child init → cloning → ready
+fork     source stopped only if it must be snapshot (announced, then restarted); child init → cloning → ready
 delete   any → (operation oriop_<hex32>) → gone
 expiry   stopAfter reached → stopping → stopped
 ```

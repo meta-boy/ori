@@ -38,6 +38,7 @@ pub async fn new(args: NewArgs, ctx: &Ctx) -> Result<(), CliError> {
         from_snapshot: args.from.clone(),
         team: args.team.clone(),
         personal: args.personal,
+        no_stop: false,
     };
     let res = ctx.api.post_stream("/sandboxes", &req).await?;
     let result = stream_progress(ctx, res).await?;
@@ -135,6 +136,9 @@ pub async fn fork(args: ForkArgs, ctx: &Ctx) -> Result<(), CliError> {
     let mut req = resume_request(&args.opts);
     // Forks default to a 1h TTL and never inherit the source's.
     req.ttl_seconds = Some(args.opts.ttl.unwrap_or(3600));
+    // --no-stop refuses a running source with no stopped snapshot instead of
+    // stopping, snapshotting and restarting it.
+    req.no_stop = args.no_stop;
     let res = ctx
         .api
         .post_stream(&format!("/sandboxes/{}/fork", args.id), &req)

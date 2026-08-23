@@ -23,7 +23,7 @@ emits a decorated table breaks every script consuming it.
 | `ori info <id>` | detail for one | |
 | `ori stop <id>` | snapshot, then power off | `--force` (skip snapshot; **loses** everything since the last one) |
 | `ori resume <id>` | start a stopped sandbox | `--type`, `--ttl`, `--no-auto-stop`, `-e/--env`, `--no-env`, `--environment` |
-| `ori fork <id>` | new sandbox from a snapshot of another | same as resume; TTL defaults to 1 h and is not inherited |
+| `ori fork <id>` | new sandbox from a snapshot of another | same as resume; TTL defaults to 1 h and is not inherited; `--no-stop` refuses a never-stopped running source instead of stopping, snapshotting and restarting it |
 | `ori extend <id>` | change the auto-stop deadline | `--hours <n>`, `--ttl <secs>`, `--no-auto-stop` |
 | `ori delete <id>` | permanently delete | `--yes` to skip the confirm |
 | `ori operation <id>` | async operation status | |

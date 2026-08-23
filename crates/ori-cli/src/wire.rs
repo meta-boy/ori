@@ -126,6 +126,10 @@ pub struct CreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     pub personal: bool,
+    /// `fork --no-stop`: refuse a running source with no stopped snapshot
+    /// instead of stopping, snapshotting and restarting it. Ignored on new
+    /// and resume.
+    pub no_stop: bool,
 }
 
 /// `POST /sandboxes/{id}/exec`. Wire shape TODO(reconcile) with ori-proto.

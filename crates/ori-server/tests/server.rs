@@ -19,7 +19,7 @@ use ori_server::config::Config;
 use ori_server::db;
 use ori_server::mock::MockProvider;
 use ori_server::pool::{PoolConfig, PoolKey, PoolManager};
-use ori_server::proto::{HostCapacity, MachineType, Provider, SnapshotRef};
+use ori_server::proto::{HostCapacity, InstanceStatus, MachineType, Provider, SnapshotRef};
 use ori_server::state::AppState;
 use ori_server::tasks;
 
@@ -793,13 +793,88 @@ async fn resume_streams_accepted_and_is_409_on_running() {
 }
 
 #[tokio::test]
-async fn fork_returns_202_and_leaves_source_untouched() {
+async fn fork_of_running_source_without_snapshot_stops_snapshots_and_restarts() {
     let t = test_app().await;
     let token = bootstrap_key(&t.app).await;
     let (src, _) = create_sandbox(&t.app, &token, json!({ "type": "small" })).await;
 
-    // A running source with no stopped snapshot must refuse, not snapshot the
-    // live container (a running-taken snapshot is ~20x slower to clone from).
+    // C24: a running source with no stopped snapshot is the common path
+    // (create, work, fork). Fork stops it, snapshots it stopped, restarts it,
+    // then clones — the source downtime is announced on the stream first.
+    let (status, stream) = call(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/fork"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let events = parse_stream(&stream);
+    let child_id = events[0]["id"].as_str().unwrap();
+    assert_eq!(events[0]["event"], "created");
+    assert_ne!(child_id, src);
+    // the downtime is announced before the stop, never discovered after it
+    let notice = events.iter().find(|e| e["event"] == "notice").unwrap();
+    assert!(notice["message"].as_str().unwrap().contains("restarting"));
+    assert_eq!(events.last().unwrap()["event"], "ready");
+
+    // the stop produced a stopped-taken (fast-cloneable) snapshot for the source
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM snapshots \
+         WHERE sandbox_id = ? AND taken_while_stopped = 1 AND state = 'complete'",
+    )
+    .bind(&src)
+    .fetch_one(&t.db)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+
+    // source is running again afterwards; child is ready and independent
+    let (_, v) = sandbox_info(&t.app, &token, &src).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+    let (_, v) = sandbox_info(&t.app, &token, child_id).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+}
+
+#[tokio::test]
+async fn fork_no_stop_refuses_running_source_without_snapshot() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (src, _) = create_sandbox(&t.app, &token, json!({ "type": "small" })).await;
+
+    // `--no-stop` keeps the refusal: fork will not take the downtime.
+    let (status, stream) = call(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/fork"),
+            Some(&token),
+            Some(json!({ "noStop": true })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let events = parse_stream(&stream);
+    assert_eq!(events.last().unwrap()["event"], "error");
+    assert_eq!(events.last().unwrap()["code"], "invalid_request");
+    let (_, v) = sandbox_info(&t.app, &token, &src).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+}
+
+#[tokio::test]
+async fn fork_clone_failure_still_restarts_source() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (src, _) = create_sandbox(&t.app, &token, json!({ "type": "small" })).await;
+
+    // The source is restarted BEFORE the clone begins, so a failed clone can
+    // never leave the user's sandbox powered off.
+    t.provider
+        .fail_next_clone
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     let (status, stream) = call(
         &t.app,
         req(
@@ -813,12 +888,36 @@ async fn fork_returns_202_and_leaves_source_untouched() {
     assert_eq!(status, StatusCode::ACCEPTED);
     let events = parse_stream(&stream);
     assert_eq!(events.last().unwrap()["event"], "error");
-    assert_eq!(events.last().unwrap()["code"], "invalid_request");
+    assert_eq!(events.last().unwrap()["code"], "provider_unavailable");
+
+    // the fork failed but the source came back up
     let (_, v) = sandbox_info(&t.app, &token, &src).await;
     assert_eq!(v["sandbox"]["state"], "ready");
+    let (handle,): (String,) = sqlx::query_as("SELECT provider_handle FROM sandboxes WHERE id = ?")
+        .bind(&src)
+        .fetch_one(&t.db)
+        .await
+        .unwrap();
+    let instance = t
+        .provider
+        .registry
+        .lock()
+        .unwrap()
+        .instances
+        .get(&handle)
+        .cloned()
+        .unwrap();
+    assert_eq!(instance.state, InstanceStatus::Running);
+}
+
+#[tokio::test]
+async fn fork_of_stopped_source_clones_its_snapshot() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (src, _) = create_sandbox(&t.app, &token, json!({ "type": "small" })).await;
 
     // stop produces a stopped-taken snapshot; fork of the stopped source then
-    // clones from it (no fresh snapshot, no `cloning` on a live container).
+    // clones from it (no fresh snapshot, no source downtime).
     let (_, _) = call_json(
         &t.app,
         req(

@@ -119,7 +119,7 @@ fast-clone-able snapshot for free:
 |---|---|---|
 | stopped sandbox | clone latest (stopped) snapshot + start | **≈6.5 s ✅** |
 | running sandbox, has a prior stopped snapshot | clone that snapshot + start | **≈6.5 s ✅** |
-| running sandbox, no stopped snapshot | stop, snapshot, clone, restart source | ≈10 s, ~5 s source downtime |
+| running sandbox, no stopped snapshot | stop, snapshot, **restart source**, clone (C24) | ≈10 s, a few seconds of source downtime ✅ |
 | naive: snapshot the live source, then clone | — | **≈52 s ✗** |
 
 The honest limitation of the fast path: forking a running sandbox from its
@@ -156,6 +156,7 @@ DHCP addresses, verified by `pct list` on the host.
 | `resume` | <=4.5 s | **5.4 s** | close; marker file survived |
 | `fork` (source **stopped**) | <=7 s | **8.9 s** | clones the snapshot `stop` already took |
 | `fork` (source **running**) | <=7 s | **8.5 s** | clones the newest stopped-taken snapshot (C12); no fresh live snapshot |
+| `fork` (source **running, never stopped**) | <15 s | **13.7 s** | C24: stop → snapshot → restart source → clone; child inherits data, source back up |
 | `delete` (API returns) | <=1 s | **1.3 s** PASS | async, returns `oriop_...` |
 
 Verified semantics, not just timings:
@@ -223,8 +224,58 @@ the running-source fork stream states the semantic cost in a `notice` event:
 filesystem as of the last stop, not writes made since. The parent was verified
 unaffected in both runs (still running, marker still present).
 
-Refusal path: forking a running sandbox that has **no** stopped-taken snapshot
-(e.g. a fresh `new` that was never stopped) is refused with a terminal `error`
-naming the ~45 s cost rather than silently paying it.
+## C24: forking a never-stopped running source — the refusal is closed
 
-**Closed. `fork` of a running sandbox meets its target.**
+`create, work, fork` is the common path, and it is exactly the case that used
+to refuse: a fresh `new` is running and has no stopped-taken snapshot, so fork
+replied `invalid_request` in 1.64 s. Fixed by stopping the source, snapshotting
+it **while stopped** (the fast-cloneable kind), restarting it, then cloning.
+Measured 2026-08-23 on the same host as C12 (load avg 3.5 — the idle figures
+above are ~35 % faster):
+
+| sequence | fork | source after | child |
+|---|---|---|---|
+| `new → exec(marker) → fork` (running, never stopped) | **13.7 s** | running again, marker intact ✅ | marker present ✅ |
+
+The source downtime is real and is **announced on the stream before the stop**
+(`notice`), not discovered afterwards:
+
+```
+{"event":"notice","id":"ori_<child>","message":"ori_<src> has never been stopped, so it has no fast snapshot; stopping it for a moment to take one for this fork, then restarting it"}
+```
+
+The source is restarted **before** the clone begins, so a failed fork never
+leaves it powered off. Verified by killing the clone mid-flight: destroying the
+child container while the fork was cloning made the fork fail with
+`cannot start clone` (terminal `error`, `provider_unavailable`) — and the
+source was running again, data intact.
+
+`--no-stop` (`noStop: true`) keeps the old refusal for anyone who cannot take
+the downtime.
+
+**Closed. `fork` works on any sandbox a user can point at.**
+
+
+## `fork` of a never-stopped sandbox: closed, at a cost
+
+Previously this refused outright (1.64 s) because no stopped-taken snapshot
+existed and a running-taken one costs ~45 s to clone from. Refusing was honest
+but made `fork` unusable on the common path - create, work, fork.
+
+It now stops the source, snapshots it while stopped, clones, and restarts the
+source: **13.7 s measured on the real host** under load ~3.5.
+
+That misses the 7 s target and is worth stating plainly rather than rounding
+down. The extra time is a real stop and start of the source, and it buys
+correctness: the alternative is a 45 s clone or an unusable command. Three
+properties make the trade acceptable:
+
+- the source's downtime is **announced on the event stream before it happens**,
+  so a dropped shell is explained rather than looking like a crash;
+- a **failed clone still restarts the source** - a broken fork never leaves the
+  user's sandbox powered off (verified by killing the clone mid-flight);
+- `--no-stop` keeps the old refusing behaviour for anyone who cannot take the
+  downtime.
+
+Forking a sandbox that *has* a stopped snapshot remains 8.5 s and takes none of
+this path.

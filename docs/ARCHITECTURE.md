@@ -167,10 +167,13 @@ Modelled on measured reality, not on wishful CRIU.
   gone (host rebuild, capacity move), fall back to `clone_from(latest_snapshot)`.
   Never `rollback` — that path costs ~47 s.
 - `fork` = `clone_from` the newest **stopped-taken** snapshot, then start.
-  Never snapshot a running source. ~7-9 s. Source is untouched. When the source
-  is running, the fork omits writes made since the last stop; the stream states
-  this in a `notice` event. A running source with no stopped snapshot is refused
-  with a message naming the ~45 s cost instead of paying it.
+  Never snapshot a live source. ~7-9 s. When the source is running, the fork
+  omits writes made since the last stop; the stream states this in a `notice`
+  event. A running source with **no** stopped snapshot is the common path —
+  fork stops it, snapshots it stopped, restarts it, then clones (≈10 s, a few
+  seconds of downtime). The downtime is announced on the stream before the
+  stop, and the source is restarted before cloning so a failed fork never
+  leaves it powered off. `--no-stop` refuses instead, naming the cost.
 - sandbox relocates on resume and its IP changes; ours may too once there is more
   than one node. Do not let anything cache the IP across a stop.
 

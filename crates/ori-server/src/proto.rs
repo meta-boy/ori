@@ -494,6 +494,9 @@ pub struct ForkSandboxRequest {
     pub no_env: Option<bool>,
     pub environment: Option<String>,
     pub team: Option<String>,
+    /// `ori fork --no-stop`: when the source is running with no stopped
+    /// snapshot, refuse instead of stopping, snapshotting and restarting it.
+    pub no_stop: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
