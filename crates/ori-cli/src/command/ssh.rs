@@ -179,9 +179,7 @@ async fn authorize(id: &str, pubkey: &str, ctx: &Ctx) -> Result<(), CliError> {
         .api
         .post_json(
             &format!("/sandboxes/{id}/sshkey"),
-            &Body {
-                public_key: pubkey,
-            },
+            &Body { public_key: pubkey },
         )
         .await?;
     Ok(())
@@ -223,12 +221,7 @@ pub async fn ssh(args: SshArgs, ctx: &Ctx) -> Result<(), CliError> {
     let (key, pubkey) = ensure_key().await?;
     authorize(&args.id, &pubkey, ctx).await?;
 
-    let mut argv = ssh_opts(
-        &exe()?,
-        &args.id,
-        &ctx.api_url_raw,
-        &key.to_string_lossy(),
-    );
+    let mut argv = ssh_opts(&exe()?, &args.id, &ctx.api_url_raw, &key.to_string_lossy());
     argv.push(format!("{SANDBOX_USER}@{}", args.id));
     argv.extend(args.command.clone());
 

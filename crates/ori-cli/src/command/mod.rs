@@ -8,6 +8,7 @@ pub mod env;
 pub mod lifecycle;
 pub mod serve;
 pub mod snapshots;
+pub mod ssh;
 pub mod stub;
 
 use crate::cli::{Command, DebugCommand};
@@ -37,9 +38,9 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Serve(a) => serve::serve(a, &ctx).await,
         Command::Agent(a) => agent::agent(a).await,
 
-        Command::Ssh(_) => Err(stub::unimplemented("ssh")),
-        Command::Scp(_) => Err(stub::unimplemented("scp")),
-        Command::Forward(_) => Err(stub::unimplemented("forward")),
+        Command::Ssh(a) => ssh::ssh(a, &ctx).await,
+        Command::Scp(a) => ssh::scp(a, &ctx).await,
+        Command::Forward(a) => ssh::forward(a, &ctx).await,
         Command::Host(a) => access::host(a, &ctx).await,
         Command::Desktop(a) => access::desktop(a, &ctx).await,
         Command::Snapshots(args) => snapshots::cmd(args, &ctx).await,

@@ -202,15 +202,16 @@ fn agent_and_roles_are_listed() {
 
 #[test]
 fn unimplemented_commands_fail_cleanly() {
-    // C16 wired `extend`, `operation`, `api-key` and removed `limits`; C22
-    // wired `webhook`, `team`, `data-retention`, `dashboard`, `self-update`;
-    // C20 wired `snapshots` and the `snapshot` subcommands. These are the
-    // commands still stubbed in this build.
+    // Only the commands genuinely still stubbed. This list has gone stale three
+    // times as features landed (`host`, `desktop`, then `ssh`/`scp`/`forward`),
+    // each time failing because something started working - so keep it to the
+    // deliberately-unbuilt ones and let the exit-code mapping be unit-tested
+    // in `error.rs` rather than re-derived from a command list here.
+    // Each needs its required args, or clap errors before reaching the stub.
     for args in [
-        vec!["ssh", "ori_x"],
-        vec!["scp", "a:b", "c:d"],
-        vec!["forward", "ori_x", "--remote", "3000"],
-        vec!["prompt"],
+        vec!["prompt", "ori_x", "--provider", "claude", "hi"],
+        vec!["interrupt", "ori_x"],
+        vec!["events", "ori_x"],
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_ori"))
             .args(&args)
