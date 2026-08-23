@@ -290,6 +290,27 @@ async fn run_create(
     // string breaks handle reconstruction and the reconciler's drift check.
     let _ = repo::set_provider_handle(&state.db, &id, &handle.id).await;
 
+    // `clone_from` leaves the instance stopped - its own contract says the
+    // caller starts it - whereas `create` starts it itself. Routing create
+    // through the golden clone therefore has to start it here, or the stream
+    // reports `ready` for a container that is powered off.
+    if golden.is_some() {
+        if let Err(e) = state.provider.start(&handle).await {
+            tracing::warn!(sandbox = %id, error = %e, "create: starting the clone failed");
+            let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
+            crate::routes::webhook::emit(&state, &id, "error").await;
+            let _ = emit(
+                &tx,
+                StreamEvent::Error {
+                    id: id.clone(),
+                    code: "provider_unavailable".into(),
+                    message: format!("could not start the cloned sandbox: {e}"),
+                },
+            );
+            return;
+        }
+    }
+
     if !emit(
         &tx,
         StreamEvent::State {
