@@ -4,12 +4,13 @@ pub mod access;
 pub mod account;
 pub mod agent;
 pub mod completions;
+pub mod env;
 pub mod lifecycle;
 pub mod serve;
 pub mod snapshots;
 pub mod stub;
 
-use crate::cli::{Command, DebugCommand, EnvCommand};
+use crate::cli::{Command, DebugCommand};
 use crate::context::Ctx;
 use crate::error::CliError;
 
@@ -43,7 +44,7 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Desktop(_) => Err(stub::unimplemented("desktop")),
         Command::Snapshots(args) => snapshots::cmd(args, &ctx).await,
         Command::Snapshot(sub) => snapshots::snapshot(&sub, &ctx).await,
-        Command::Env(sub) => env_stub(&sub),
+        Command::Env(sub) => env::cmd(&sub, &ctx).await,
         Command::Webhook(sub) => account::webhook(sub, &mut ctx).await,
         Command::Team(sub) => account::team(sub, &mut ctx).await,
         Command::DataRetention(sub) => account::data_retention(sub, &ctx).await,
@@ -53,26 +54,6 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Interrupt(_) => Err(stub::unimplemented("interrupt")),
         Command::Events(_) => Err(stub::unimplemented("events")),
     }
-}
-
-fn env_stub(sub: &EnvCommand) -> Result<(), CliError> {
-    let name = match sub {
-        EnvCommand::List => "env list",
-        EnvCommand::Info { .. } => "env info",
-        EnvCommand::New { .. } => "env new",
-        EnvCommand::Rename { .. } => "env rename",
-        EnvCommand::Default { .. } => "env default",
-        EnvCommand::Rm { .. } => "env rm",
-        EnvCommand::Set { .. } => "env set",
-        EnvCommand::SetVar { .. } => "env set-var",
-        EnvCommand::RmVar { .. } => "env rm-var",
-        EnvCommand::SetFile { .. } => "env set-file",
-        EnvCommand::RmFile { .. } => "env rm-file",
-        EnvCommand::AddRepo { .. } => "env add-repo",
-        EnvCommand::RmRepo { .. } => "env rm-repo",
-        EnvCommand::Upgrade { .. } => "env upgrade",
-    };
-    Err(stub::unimplemented(name))
 }
 
 async fn debug(cmd: DebugCommand, ctx: &Ctx) -> Result<(), CliError> {

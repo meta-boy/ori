@@ -255,6 +255,10 @@ pub struct SshArgs {
     pub id: String,
     /// Optional command to run instead of a shell
     pub command: Vec<String>,
+    /// Internal: relay stdio to the sandbox's sshd over the control plane.
+    /// Used as ssh's ProxyCommand; not meant to be run directly.
+    #[arg(long, hide = true)]
+    pub stdio: bool,
 }
 
 #[derive(Debug, Args)]
@@ -406,21 +410,43 @@ pub enum EnvCommand {
     Default { name: String },
     /// Delete an environment
     Rm { name: String },
-    /// Set safety toggles
-    Set { name: String },
+    /// Set a safety toggle
+    Set {
+        /// Environment name
+        name: String,
+        /// Toggle name: inject_vars | inject_files | inject_secrets
+        toggle: String,
+        /// Turn the toggle on
+        #[arg(long)]
+        on: bool,
+        /// Turn the toggle off
+        #[arg(long)]
+        off: bool,
+    },
     /// Set an environment variable
-    SetVar { name: String, key_value: String },
+    SetVar {
+        name: String,
+        key_value: String,
+        /// Mark the value as a secret (redacted from info, withheld when the
+        /// inject_secrets toggle is off)
+        #[arg(long)]
+        secret: bool,
+    },
     /// Remove an environment variable
     RmVar { name: String, key: String },
-    /// Store a secret file
+    /// Store a secret file's contents under a path in the sandbox
     SetFile {
         name: String,
         key: String,
         path: String,
+        /// Mark the file as a secret (redacted from info, withheld when the
+        /// inject_secrets toggle is off)
+        #[arg(long)]
+        secret: bool,
     },
     /// Remove a secret file
     RmFile { name: String, key: String },
-    /// Add a repo to the bundle
+    /// Add a repo to the bundle (`url[@branch]`)
     AddRepo { name: String, repo: String },
     /// Remove a repo from the bundle
     RmRepo { name: String, repo: String },

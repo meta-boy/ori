@@ -7,7 +7,7 @@ use crate::error::ApiResult;
 use crate::proto::{BoxState, MachineType, Sandbox};
 use crate::util::now_ts;
 
-const SAND_COLUMNS: &str = "id, account_id, name, state, machine_type, slug, provider, \
+pub(crate) const SAND_COLUMNS: &str = "id, account_id, name, state, machine_type, slug, provider, \
      provider_handle, environment, environment_version, no_env, ip, url, ssh_endpoint, \
      desktop_available, desktop_url, created_at, updated_at, stop_after, snapshot_available, \
      last_snapshot_attempt_at, last_snapshot_status, snapshot_completed_at, setup_status, \

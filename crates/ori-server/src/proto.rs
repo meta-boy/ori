@@ -89,6 +89,26 @@ impl TypedId {
     pub fn process() -> TypedId {
         TypedId::random(32, HEX, "orip_")
     }
+    /// `orie_` + 16 hex — environment id.
+    pub fn env() -> TypedId {
+        TypedId::random(16, HEX, "orie_")
+    }
+    /// `oriev_` + 16 hex — environment version id.
+    pub fn env_version() -> TypedId {
+        TypedId::random(16, HEX, "oriev_")
+    }
+    /// `orievar_` + 16 hex — environment var id.
+    pub fn env_var() -> TypedId {
+        TypedId::random(16, HEX, "orievar_")
+    }
+    /// `orief_` + 16 hex — environment file id.
+    pub fn env_file() -> TypedId {
+        TypedId::random(16, HEX, "orief_")
+    }
+    /// `orier_` + 16 hex — environment repo id.
+    pub fn env_repo() -> TypedId {
+        TypedId::random(16, HEX, "orier_")
+    }
     /// `ori_sk_` + 40 hex — the api key secret shown exactly once.
     pub fn api_key_secret() -> TypedId {
         TypedId::random(40, HEX, "ori_sk_")

@@ -54,10 +54,11 @@ pub async fn create_sandbox(
     Json(req): Json<CreateSandboxRequest>,
 ) -> ApiResult<Response> {
     let machine_type = req.machine_type.unwrap_or(MachineType::Default);
-    let environment = req
-        .environment
-        .clone()
-        .unwrap_or_else(|| "base".to_string());
+    // Resolve the environment to a pinned version before anything is created:
+    // the sandbox is bound to this version until `env upgrade` moves it.
+    let (environment, environment_version) =
+        crate::env::resolve_environment(&state.db, &auth.account_id, req.environment.as_deref())
+            .await?;
 
     if req.from_snapshot.is_some() {
         return Err(ApiError::invalid_request(
@@ -75,7 +76,16 @@ pub async fn create_sandbox(
     let state2 = state.clone();
     let account_id = auth.0.account_id;
     tokio::spawn(async move {
-        run_create(state2, account_id, req, machine_type, environment, tx).await;
+        run_create(
+            state2,
+            account_id,
+            req,
+            machine_type,
+            environment,
+            environment_version,
+            tx,
+        )
+        .await;
     });
     Ok(ndjson_response(rx, StatusCode::OK))
 }
@@ -86,6 +96,7 @@ async fn run_create(
     req: CreateSandboxRequest,
     machine_type: MachineType,
     environment: String,
+    environment_version: i64,
     tx: mpsc::UnboundedSender<Bytes>,
 ) {
     let ttl = if req.no_auto_stop.unwrap_or(false) {
@@ -106,6 +117,7 @@ async fn run_create(
         &name,
         machine_type,
         &environment,
+        environment_version,
         no_env,
         stop_after.as_deref(),
         req.team.as_deref(),
@@ -153,7 +165,7 @@ async fn run_create(
         name: name.clone(),
         machine_type,
         environment: environment.clone(),
-        environment_version: 1,
+        environment_version,
         env_vars,
     };
 
@@ -312,10 +324,15 @@ async fn finish_ready(
         },
     );
     crate::routes::webhook::emit(state, id, "ready").await;
+    // Push the environment claim to the agent. Best-effort: if no tunnel is
+    // up yet (the mock, or a sandbox still provisioning), the connect-time
+    // push in the tunnel handler delivers it on the first `hello`.
+    let _ = crate::env::push_claim_for_sandbox(state, id).await;
 }
 
 /// Insert the sandbox row, retrying on a slug collision. The uniqueness
 /// constraint is the arbiter, not the generator.
+#[allow(clippy::too_many_arguments)]
 async fn insert_with_slug(
     state: &AppState,
     account_id: &str,
@@ -323,6 +340,7 @@ async fn insert_with_slug(
     name: &str,
     machine_type: MachineType,
     environment: &str,
+    environment_version: i64,
     no_env: bool,
     stop_after: Option<&str>,
     team: Option<&str>,
@@ -339,7 +357,7 @@ async fn insert_with_slug(
             provider: state.provider.name().to_string(),
             provider_handle: provider_handle.to_string(),
             environment: environment.to_string(),
-            environment_version: 1,
+            environment_version,
             no_env,
             stop_after: stop_after.map(|s| s.to_string()),
             team: team.map(|s| s.to_string()),
@@ -618,6 +636,10 @@ async fn run_resume(
         },
     );
     crate::routes::webhook::emit(&state, &id, "ready").await;
+    // A resumed sandbox keeps its pinned environment version; re-push the claim
+    // so a live tunnel immediately reflects `--no-env` scrubs the resume
+    // requested. Best-effort like create.
+    let _ = crate::env::push_claim_for_sandbox(&state, &id).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -692,6 +714,7 @@ async fn run_fork(
         &name,
         machine_type,
         &environment,
+        source.environment_version,
         no_env,
         stop_after.as_deref(),
         req.team.as_deref(),
@@ -941,6 +964,10 @@ async fn run_fork(
         },
     );
     crate::routes::webhook::emit(&state, &child_id, "ready").await;
+    // The fork inherits the source's pinned version and no-env state. If the
+    // source was no-env, the child's claim is empty — inherited secrets are
+    // scrubbed, never copied forward.
+    let _ = crate::env::push_claim_for_sandbox(&state, &child_id).await;
 }
 
 /// C24: the common path — create, work, fork. A running source that has never

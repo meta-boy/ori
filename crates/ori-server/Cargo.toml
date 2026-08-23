@@ -34,3 +34,4 @@ http-body-util = "0.1"
 hmac = { version = "0.12", features = ["std"] }
 sha2 = "0.10"
 tempfile = "3"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

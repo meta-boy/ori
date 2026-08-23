@@ -15,6 +15,7 @@ mod account;
 mod ai;
 mod dashboard;
 pub(crate) mod data_retention;
+mod environments;
 mod login;
 mod operations;
 mod sandboxes;
@@ -96,6 +97,54 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/api-keys", get(account::list_api_keys))
         .route("/api/v1/api-keys/:id/rotate", post(account::rotate_api_key))
         .route("/api/v1/api-keys/:id/revoke", post(account::revoke_api_key))
+        .route(
+            "/api/v1/environments",
+            get(environments::list_envs).post(environments::create_env),
+        )
+        .route(
+            "/api/v1/environments/:name",
+            get(environments::get_env).delete(environments::delete_env),
+        )
+        .route(
+            "/api/v1/environments/:name/rename",
+            post(environments::rename_env),
+        )
+        .route(
+            "/api/v1/environments/:name/default",
+            post(environments::set_default),
+        )
+        .route(
+            "/api/v1/environments/:name/set",
+            post(environments::set_toggle),
+        )
+        .route(
+            "/api/v1/environments/:name/vars",
+            post(environments::set_var),
+        )
+        .route(
+            "/api/v1/environments/:name/vars/:key",
+            delete(environments::rm_var),
+        )
+        .route(
+            "/api/v1/environments/:name/files",
+            post(environments::set_file),
+        )
+        .route(
+            "/api/v1/environments/:name/files/*path",
+            delete(environments::rm_file),
+        )
+        .route(
+            "/api/v1/environments/:name/repos",
+            post(environments::add_repo),
+        )
+        .route(
+            "/api/v1/environments/:name/repos/*url",
+            delete(environments::rm_repo),
+        )
+        .route(
+            "/api/v1/environments/:name/upgrade",
+            post(environments::upgrade),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

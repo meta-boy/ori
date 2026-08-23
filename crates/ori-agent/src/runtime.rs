@@ -1,7 +1,7 @@
 //! The agent runtime: owns the sandbox-side state (injected env, detached
 //! process registry, setup runner) and answers control-plane requests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,6 +31,11 @@ pub fn logs_dir() -> PathBuf {
 pub struct Agent {
     pub cfg: Config,
     claim_env: Mutex<HashMap<String, String>>,
+    /// Secret files this agent has written via any apply. The claim is
+    /// **authoritative**: a later apply that does not carry one of these paths
+    /// deletes it, so an environment that removed a secret file actually
+    /// scrubs it from the sandbox instead of leaving it lying around.
+    applied_files: Mutex<HashSet<PathBuf>>,
     registry: Arc<Mutex<Registry>>,
     setup: SetupRunner,
     logs_dir: PathBuf,
@@ -44,6 +49,7 @@ impl Agent {
         Self {
             cfg,
             claim_env: Mutex::new(HashMap::new()),
+            applied_files: Mutex::new(HashSet::new()),
             registry: Arc::new(Mutex::new(Registry::new())),
             setup,
             logs_dir,
@@ -59,6 +65,7 @@ impl Agent {
         Self {
             cfg,
             claim_env: Mutex::new(HashMap::new()),
+            applied_files: Mutex::new(HashSet::new()),
             registry: Arc::new(Mutex::new(Registry::new())),
             setup,
             logs_dir,
@@ -71,12 +78,43 @@ impl Agent {
     }
 
     /// Apply a claim payload (env vars, secret files, repo checkouts) from the
-    /// config at boot. Commits the claim env only on full success so a failed
-    /// claim does not half-apply.
+    /// config at boot, or pushed by the control plane on connect/upgrade.
+    ///
+    /// The claim is **authoritative**: its env replaces the previously-applied
+    /// claim env (a var the environment removed is gone from every future
+    /// `exec`), and a secret file the environment removed is deleted. All of it
+    /// commits atomically — a failed claim leaves the previous state untouched.
     pub async fn apply_claim(&self, claim: &crate::config::Claim) -> Result<(), AgentError> {
-        let mut env_map = self.claim_env.lock().unwrap().clone();
+        let mut env_map = claim.env.clone();
         crate::inject::apply_claim(claim, &mut env_map).await?;
+
+        // The claim env replaces the old claim env (which may be empty at
+        // boot). `inject::apply_claim` extended `env_map` with the same values,
+        // so committing it here is a no-op vs the copy above.
         *self.claim_env.lock().unwrap() = env_map;
+
+        // Scrub files the environment removed. A file the agent wrote and the
+        // new claim no longer carries is deleted — that is what "the removal is
+        // the point of the upgrade" means for secret files.
+        let new_paths: HashSet<PathBuf> =
+            claim.secret_files.iter().map(|f| f.path.clone()).collect();
+        let removed: Vec<PathBuf> = {
+            let applied = self.applied_files.lock().unwrap();
+            applied.difference(&new_paths).cloned().collect()
+        };
+        for path in removed {
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(AgentError::Other(format!(
+                        "cannot scrub secret file {}: {e}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        let mut applied = self.applied_files.lock().unwrap();
+        applied.retain(|p| new_paths.contains(p));
+        applied.extend(new_paths);
         Ok(())
     }
 

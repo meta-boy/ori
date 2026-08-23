@@ -263,7 +263,7 @@ fn env_subcommands() {
     ));
     assert!(matches!(
         parse(&["env", "set-var", "prod", "KEY=VALUE"]).command,
-        Command::Env(EnvCommand::SetVar { name, key_value }) if name == "prod" && key_value == "KEY=VALUE"
+        Command::Env(EnvCommand::SetVar { name, key_value, .. }) if name == "prod" && key_value == "KEY=VALUE"
     ));
     assert!(matches!(
         parse(&["env", "rename", "old", "new"]).command,

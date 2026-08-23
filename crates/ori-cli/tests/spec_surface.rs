@@ -210,7 +210,6 @@ fn unimplemented_commands_fail_cleanly() {
         vec!["ssh", "ori_x"],
         vec!["scp", "a:b", "c:d"],
         vec!["forward", "ori_x", "--remote", "3000"],
-        vec!["env", "list"],
         vec!["prompt"],
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_ori"))

@@ -229,6 +229,33 @@ impl AgentRegistry {
         self.request(sandbox_id, &id, frame).await
     }
 
+    /// Push an `apply` frame (a claim) to the sandbox's agent and await its
+    /// `applyResult`.
+    ///
+    /// `Ok(())` means the agent applied the claim; `Err(message)` means it
+    /// reported failure (a secret file could not be written, a checkout
+    /// failed). `None` means the sandbox has no live tunnel — the caller
+    /// treats that as a retry-on-connect, never as an error.
+    pub async fn apply(&self, sandbox_id: &str, frame: Value) -> Option<Result<(), String>> {
+        let id = frame
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(request_id);
+        let v = self.request(sandbox_id, &id, frame).await?;
+        let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
+        if ok {
+            Some(Ok(()))
+        } else {
+            let message = v
+                .get("error")
+                .and_then(|x| x.as_str())
+                .unwrap_or("agent rejected the claim")
+                .to_string();
+            Some(Err(message))
+        }
+    }
+
     /// Open a TCP stream to `port` on loopback inside the sandbox.
     ///
     /// `None` means no live tunnel — the caller should report that plainly
@@ -342,7 +369,7 @@ impl AgentRegistry {
 }
 
 /// 128 bits of CSPRNG hex. Used for both request ids and agent tokens.
-fn random_hex(bytes: usize) -> String {
+pub(crate) fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     getrandom::fill(&mut buf).expect("csprng");
     buf.iter().map(|b| format!("{b:02x}")).collect()
@@ -487,6 +514,17 @@ async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
                         .unwrap_or("?")
                         .to_string();
                     tracing::info!(sandbox = %sandbox_id, version = %version, "agent hello");
+                    // Push the sandbox's pinned environment claim now that the
+                    // agent is reachable. Spawned so the hello is acknowledged
+                    // promptly even if the claim takes a while (secret files,
+                    // repo checkouts). Idempotent on reconnect.
+                    let state2 = state.clone();
+                    let sid = sandbox_id.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = crate::env::push_claim_for_sandbox(&state2, &sid).await {
+                            tracing::warn!(sandbox = %sid, error = %e, "env: claim push on connect failed");
+                        }
+                    });
                     continue;
                 }
                 // Correlate by id; an uncorrelated frame is logged, never dropped

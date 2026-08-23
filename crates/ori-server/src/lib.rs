@@ -6,6 +6,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod deletion;
+pub mod env;
 pub mod error;
 pub mod mock;
 pub mod ndjson;
