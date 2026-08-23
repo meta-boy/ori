@@ -130,6 +130,59 @@ pub async fn insert_sandbox(db: &SqlitePool, s: &NewSandbox) -> Result<(), sqlx:
     Ok(())
 }
 
+/// Record a completed provider snapshot. `taken_while_stopped` must be true
+/// only for snapshots taken while the container was powered off: `fork` clones
+/// exclusively from those (docs/BENCHMARKS.md §Root cause), because a
+/// running-taken snapshot is permanently ~20x slower to clone from. A snapshot
+/// named for the local action ("stop", "ttl", "fork") carries the provider
+/// scoped ref in `provider_snapshot` (`node/vmid/name` on proxmox).
+pub async fn insert_snapshot(
+    db: &SqlitePool,
+    account_id: &str,
+    sandbox_id: &str,
+    name: &str,
+    provider_snapshot: &str,
+    taken_while_stopped: bool,
+) -> Result<(), sqlx::Error> {
+    let now = now_ts();
+    let id = crate::proto::TypedId::snapshot().to_string();
+    sqlx::query(
+        "INSERT INTO snapshots (id, account_id, sandbox_id, name, provider_snapshot, state, \
+         is_incremental, parent_id, created_at, completed_at, taken_while_stopped) \
+         VALUES (?, ?, ?, ?, ?, 'complete', 0, NULL, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(account_id)
+    .bind(sandbox_id)
+    .bind(name)
+    .bind(provider_snapshot)
+    .bind(&now)
+    .bind(&now)
+    .bind(taken_while_stopped)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// The newest snapshot of `sandbox_id` that was taken while the container was
+/// stopped, or `None`. `fork` clones from this — never from a fresh snapshot
+/// of a running source. `created_at` is second-precision, so `rowid DESC`
+/// breaks ties toward the most recent insert.
+pub async fn latest_stopped_snapshot(
+    db: &SqlitePool,
+    sandbox_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT provider_snapshot FROM snapshots \
+         WHERE sandbox_id = ? AND taken_while_stopped = 1 AND state = 'complete' \
+         ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    )
+    .bind(sandbox_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(s,)| s))
+}
+
 pub fn is_unique_violation(e: &sqlx::Error) -> bool {
     e.as_database_error()
         .map(|d| d.is_unique_violation())

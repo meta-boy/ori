@@ -10,7 +10,9 @@
 use std::path::Path;
 use std::time::Duration;
 
-use ori_agent::{Agent, Config, Incoming, Outgoing};
+use ori_agent::{
+    Agent, Config, Incoming, Outgoing, StreamDataFrame, Streams, OUTBOUND_BUFFER_CHUNKS,
+};
 use tokio::sync::mpsc;
 
 /// A minimal config pointed at a throwaway control-plane URL. The tunnel is
@@ -25,17 +27,38 @@ pub fn cfg(work_dir: &Path) -> Config {
     }
 }
 
+/// Everything a handler run emitted: JSON text frames plus any binary stream
+/// data.
+#[derive(Debug)]
+pub struct Frames {
+    pub json: Vec<Outgoing>,
+    pub bin: Vec<StreamDataFrame>,
+}
+
+impl Frames {
+    /// A handler emitted no stream data.
+    pub fn assert_no_stream_data(&self) {
+        assert!(
+            self.bin.is_empty(),
+            "expected no stream data: {:?}",
+            self.bin
+        );
+    }
+}
+
 /// Drive one request through `Agent::handle` and collect every frame it emits.
 /// Frames that legitimately arrive after the handler returns (e.g. proactive
-/// `setupStatus`) are caught by a short grace poll.
-pub async fn request(agent: &Agent, msg: Incoming) -> Vec<Outgoing> {
+/// `setupStatus`, or a stream relay's terminal `streamClose`) are caught by a
+/// short grace poll.
+pub async fn request(agent: &Agent, msg: Incoming) -> Frames {
     let (tx, mut rx) = mpsc::channel(64);
-    agent.handle(msg, tx).await.expect("handler must not error");
-    let mut out = Vec::new();
-    while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-        out.push(frame);
-    }
-    out
+    let (bin_tx, mut bin_rx) = mpsc::channel::<StreamDataFrame>(OUTBOUND_BUFFER_CHUNKS);
+    let streams = Streams::new(bin_tx);
+    agent
+        .handle(msg, tx.clone(), &streams)
+        .await
+        .expect("handler must not error");
+    drain(&mut rx, &mut bin_rx).await
 }
 
 /// Poll `request` until a predicate holds or a deadline passes.
@@ -44,30 +67,92 @@ pub async fn request_until(
     msg: Incoming,
     deadline: tokio::time::Instant,
     mut pred: impl FnMut(&Outgoing) -> bool,
-) -> Vec<Outgoing> {
+) -> Frames {
     let (tx, mut rx) = mpsc::channel(64);
-    agent.handle(msg, tx).await.expect("handler must not error");
-    let mut out = Vec::new();
-    while let Ok(Some(frame)) = tokio::time::timeout_at(deadline, rx.recv()).await {
-        if pred(&frame) {
-            out.push(frame);
-            break;
+    let (bin_tx, mut bin_rx) = mpsc::channel::<StreamDataFrame>(OUTBOUND_BUFFER_CHUNKS);
+    let streams = Streams::new(bin_tx);
+    agent
+        .handle(msg, tx.clone(), &streams)
+        .await
+        .expect("handler must not error");
+    let mut out = Frames {
+        json: Vec::new(),
+        bin: Vec::new(),
+    };
+    loop {
+        tokio::select! {
+            f = rx.recv() => {
+                match f {
+                    Some(f) => {
+                        let hit = pred(&f);
+                        out.json.push(f);
+                        if hit {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            f = bin_rx.recv() => {
+                match f {
+                    Some(f) => out.bin.push(f),
+                    None => break,
+                }
+            }
+            _ = tokio::time::sleep_until(deadline) => break,
         }
-        out.push(frame);
+    }
+    out
+}
+
+/// Drain both channels until 200 ms of quiet (or closure of either).
+async fn drain(
+    rx: &mut mpsc::Receiver<Outgoing>,
+    bin_rx: &mut mpsc::Receiver<StreamDataFrame>,
+) -> Frames {
+    let mut out = Frames {
+        json: Vec::new(),
+        bin: Vec::new(),
+    };
+    let mut idle = false;
+    while !idle {
+        tokio::select! {
+            f = rx.recv() => match f {
+                Some(f) => out.json.push(f),
+                None => break,
+            },
+            f = bin_rx.recv() => match f {
+                Some(f) => out.bin.push(f),
+                None => break,
+            },
+            _ = tokio::time::sleep(Duration::from_millis(200)) => idle = true,
+        }
     }
     out
 }
 
 /// Extract the terminal `execResult` from a batch of frames.
-pub fn exec_result(frames: &[Outgoing]) -> Option<&Outgoing> {
+pub fn exec_result(frames: &Frames) -> Option<&Outgoing> {
     frames
+        .json
         .iter()
         .find(|f| matches!(f, Outgoing::ExecResult { .. }))
 }
 
 /// Extract a `setupStatus` frame from a batch.
-pub fn setup_status(frames: &[Outgoing]) -> Option<&Outgoing> {
+pub fn setup_status(frames: &Frames) -> Option<&Outgoing> {
     frames
+        .json
         .iter()
         .find(|f| matches!(f, Outgoing::SetupStatus { .. }))
+}
+
+/// Concatenate the stream data for one stream id from a batch of frames.
+pub fn stream_bytes(frames: &Frames, id: u64) -> Vec<u8> {
+    frames
+        .bin
+        .iter()
+        .filter(|f| f.id == id)
+        .flat_map(|f| f.bytes.iter().copied())
+        .collect()
 }

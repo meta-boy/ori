@@ -25,6 +25,7 @@ async fn host_result(agent: &Agent, port: u16) -> Outgoing {
         },
     )
     .await
+    .json
     .into_iter()
     .find(|f| matches!(f, Outgoing::HostResult { .. }))
     .expect("expected a hostResult frame")

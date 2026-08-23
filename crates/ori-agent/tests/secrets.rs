@@ -46,6 +46,7 @@ async fn secret_file_lands_0600_roundtrip() {
 
         assert!(matches!(
             frames
+                .json
                 .iter()
                 .find(|f| matches!(f, Outgoing::ApplyResult { .. })),
             Some(Outgoing::ApplyResult { ok: true, .. })
@@ -82,6 +83,7 @@ async fn failed_claim_reports_not_ok_and_leaves_no_partial_secret() {
     .await;
     assert!(matches!(
         frames
+            .json
             .iter()
             .find(|f| matches!(f, Outgoing::ApplyResult { .. })),
         Some(Outgoing::ApplyResult { ok: false, .. })

@@ -50,9 +50,20 @@ the whole operation.
 Errors are a **terminal event on the stream**, not a mid-stream status change —
 by the time an error is known the HTTP status is long since sent.
 
+`fork` never snapshots a running source: it clones from the newest snapshot
+that was taken while the source was **stopped** (a running-taken snapshot is
+permanently ~20x slower to clone from — see `docs/BENCHMARKS.md` §Root cause).
+Reusing that older snapshot means writes made since the last stop are **not**
+in the fork; that is stated on the stream so it is never a silent omission.
+
 ```
 {"event":"error","id":"ori_a1b2c3d4","code":"provider_unavailable","message":"..."}
+{"event":"notice","id":"ori_<child>","message":"forked from the snapshot taken when ori_<src> was last stopped; writes made since that stop are not in this fork"}
 ```
+
+`fork` refuses (terminal `error`, code `invalid_request`) when the source is
+running but has no stopped snapshot, naming the ~45 s cost of snapshotting a
+live container instead of paying it.
 
 ## Sandbox object
 

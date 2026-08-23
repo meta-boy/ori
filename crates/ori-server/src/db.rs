@@ -80,5 +80,14 @@ mod tests {
                     .unwrap();
             assert_eq!(row.0, 1, "missing table {table}");
         }
+        // C12 migration: snapshots carry whether the source was stopped when
+        // the snapshot was taken — fork clones only from stopped-taken ones.
+        let row: (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM pragma_table_info('snapshots') WHERE name='taken_while_stopped'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, 1, "snapshots.taken_while_stopped column missing");
     }
 }

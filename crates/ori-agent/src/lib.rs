@@ -11,6 +11,11 @@
 //! - **`host <port>`** — register a port with the plane and report whether
 //!   anything is actually listening (and whether it is loopback-only — the
 //!   most common `ori host` mistake).
+//! - **TCP/file streams** — `streamOpen` dials `127.0.0.1:<port>` or
+//!   reads/writes a path rooted at the work dir (directories tarred), with
+//!   bounded per-stream buffers so a busy stream cannot grow memory
+//!   unboundedly. This is the primitive behind `ori forward` and the SSH
+//!   splice.
 //! - **Claim-time config injection** — env vars, secret files (0600, never via
 //!   a world-readable temp path), and repo checkouts.
 //! - **Setup script** — the ≤ 64 KiB `--setup-file` payload, run in the
@@ -36,13 +41,19 @@ mod processes;
 mod procfs;
 mod runtime;
 mod setup;
+mod streams;
 mod tunnel;
 mod wire;
 
 pub use config::{Claim, Config, RepoRef, SecretFile, SetupSpec};
 pub use error::AgentError;
 pub use runtime::Agent;
-pub use wire::{Incoming, Outgoing, RepoMsg, SecretFileMsg, SetupMsg};
+pub use streams::{Streams, OUTBOUND_BUFFER_CHUNKS, STREAM_CHUNK_BYTES, STREAM_INBOUND_CHUNKS};
+pub use wire::{
+    decode_stream_data, encode_stream_data, Incoming, Outgoing, RepoMsg, SecretFileMsg, SetupMsg,
+    StreamDataFrame, StreamFileMode, StreamId, StreamKind, STREAM_CLOSE_IO, STREAM_CLOSE_OK,
+    STREAM_CLOSE_REFUSED, STREAM_CLOSE_REJECTED,
+};
 
 /// Agent entrypoint. Blocks until the process is terminated.
 ///

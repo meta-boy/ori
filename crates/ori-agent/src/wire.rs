@@ -25,6 +25,31 @@
 //! A non-zero remote exit code is carried in `execResult.exitCode`; the CLI
 //! exits with it, so `ori exec mycmd || handle` can distinguish a failed remote
 //! command from a failed API call.
+//!
+//! ## Byte streams (`plans/C13-agent-streams.md`)
+//!
+//! ```text
+//! plane ──> agent  {"type":"streamOpen", "id", "kind"}       (JSON text)
+//! plane ──> agent  [8-byte LE id][bytes]...                  (binary `streamData`)
+//! plane ──> agent  {"type":"streamClose", "id", "code"}      (JSON text)
+//! agent ──> plane  [8-byte LE id][bytes]...                  (binary `streamData`)
+//! agent ──> plane  {"type":"streamClose", "id", "code"}      (JSON text)
+//! ```
+//!
+//! `streamData` is a **binary** WebSocket frame — the raw bytes are not
+//! base64-in-JSON, which would inflate every byte ~33% on the hot path. The
+//! frame is an 8-byte little-endian stream id followed by the chunk bytes
+//! (see [`encode_stream_data`] / [`decode_stream_data`]). The JSON
+//! `StreamData` variants below exist so the protocol shape is complete and a
+//! stray text `streamData` is not misparsed; the transport is binary.
+//!
+//! Stream ids are `u64`s chosen by the control plane and are agent-scoped.
+//! `streamClose.code` is 0 for a clean close (EOF / all data written) and
+//! non-zero for failure:
+//!
+//! - [`STREAM_CLOSE_OK`] = 0 clean, [`STREAM_CLOSE_REFUSED`] = 1 dial/open
+//!   refused, [`STREAM_CLOSE_REJECTED`] = 2 path escaped the work dir,
+//!   [`STREAM_CLOSE_IO`] = 3 mid-stream I/O error.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -102,6 +127,26 @@ pub enum Incoming {
         #[serde(default)]
         public: Option<bool>,
     },
+
+    /// Open a byte stream. `Tcp` dials `127.0.0.1:<port>` inside the sandbox —
+    /// the primitive behind `ori forward` and the SSH splice, and it works
+    /// because the agent dials outward so nothing needs to be routable inbound.
+    /// `File` reads or writes a path rooted at the sandbox work dir; a
+    /// directory is tarred (read) or extracted from a tar stream (write). See
+    /// `plans/C13-agent-streams.md`.
+    #[serde(rename_all = "camelCase")]
+    StreamOpen { id: StreamId, kind: StreamKind },
+
+    /// Data for a stream. On the wire this is a *binary* frame (8-byte LE id +
+    /// raw bytes), never base64-in-JSON; this variant is here so the protocol
+    /// shape is complete and the tunnel can route a text `streamData` too.
+    #[serde(rename_all = "camelCase")]
+    StreamData { id: StreamId, bytes: Vec<u8> },
+
+    /// Close a stream from the control-plane side. The agent tears down its end
+    /// and acks with its own `streamClose`.
+    #[serde(rename_all = "camelCase")]
+    StreamClose { id: StreamId, code: u16 },
 }
 
 /// A secret file to materialize on the sandbox. Contents are base64 so
@@ -230,6 +275,17 @@ pub enum Outgoing {
         error: Option<String>,
     },
 
+    /// Data for a stream. The hot path sends this as a *binary* frame (see
+    /// [`encode_stream_data`]); if one ever reaches the JSON channel the tunnel
+    /// still encodes it binary, never base64.
+    #[serde(rename_all = "camelCase")]
+    StreamData { id: StreamId, bytes: Vec<u8> },
+
+    /// A stream closed or failed from the agent side. `code` is 0 for a clean
+    /// close; see the module docs for the code table.
+    #[serde(rename_all = "camelCase")]
+    StreamClose { id: StreamId, code: u16 },
+
     /// A request failed at the transport/parse/spawn level. Carries the request
     /// id when the failure is tied to one.
     #[serde(rename_all = "camelCase")]
@@ -247,6 +303,62 @@ pub fn decode_b64(s: &str) -> Result<Vec<u8>, AgentError> {
     base64::engine::general_purpose::STANDARD
         .decode(s.trim())
         .map_err(|e| AgentError::Config(format!("bad base64 payload: {e}")))
+}
+
+/// Stream ids are `u64`s chosen by the control plane. Agent-scoped: the id
+/// space starts fresh on every tunnel reconnect.
+pub type StreamId = u64;
+
+/// What a `streamOpen` asks the agent to relay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StreamKind {
+    /// Dial `127.0.0.1:<port>` inside the sandbox and relay bytes both ways.
+    Tcp { port: u16 },
+    /// Read or write a path rooted at the sandbox work dir. A directory is
+    /// tarred over the same stream (read: `tar -cf -`, write: `tar -xf -`).
+    File { path: String, mode: StreamFileMode },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamFileMode {
+    Read,
+    Write,
+}
+
+/// `streamClose` codes. `STREAM_CLOSE_OK` means clean (EOF, or all data
+/// written); the rest are failures the plane should surface to the user.
+pub const STREAM_CLOSE_OK: u16 = 0;
+pub const STREAM_CLOSE_REFUSED: u16 = 1;
+pub const STREAM_CLOSE_REJECTED: u16 = 2;
+pub const STREAM_CLOSE_IO: u16 = 3;
+
+/// One binary `streamData` chunk queued for the WebSocket writer. Kept as a
+/// struct (rather than a raw `Vec<u8>`) so the writer knows the id to encode
+/// and tests can inspect chunks without re-parsing a binary header.
+#[derive(Debug, Clone)]
+pub struct StreamDataFrame {
+    pub id: StreamId,
+    pub bytes: Vec<u8>,
+}
+
+/// Encode a binary `streamData` frame: 8-byte little-endian stream id followed
+/// by the raw chunk bytes.
+pub fn encode_stream_data(id: StreamId, bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + bytes.len());
+    out.extend_from_slice(&id.to_le_bytes());
+    out.extend_from_slice(bytes);
+    out
+}
+
+/// Decode a binary `streamData` frame into `(id, payload)`.
+pub fn decode_stream_data(frame: &[u8]) -> Option<(StreamId, &[u8])> {
+    if frame.len() < 8 {
+        return None;
+    }
+    let id = StreamId::from_le_bytes(frame[..8].try_into().ok()?);
+    Some((id, &frame[8..]))
 }
 
 #[cfg(test)]
@@ -351,5 +463,72 @@ mod tests {
     fn decodes_base64() {
         assert_eq!(decode_b64("c2VjcmV0").unwrap(), b"secret");
         assert!(decode_b64("not base64!!").is_err());
+    }
+
+    #[test]
+    fn parses_stream_open_tcp_and_file() {
+        let raw = r#"{"type":"streamOpen","id":7,"kind":{"type":"tcp","port":22}}"#;
+        match serde_json::from_str::<Incoming>(raw).unwrap() {
+            Incoming::StreamOpen { id, kind } => {
+                assert_eq!(id, 7);
+                assert!(matches!(kind, StreamKind::Tcp { port: 22 }));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let raw = r#"{"type":"streamOpen","id":8,"kind":{"type":"file","path":"logs/x.txt","mode":"write"}}"#;
+        match serde_json::from_str::<Incoming>(raw).unwrap() {
+            Incoming::StreamOpen { id, kind } => {
+                assert_eq!(id, 8);
+                match kind {
+                    StreamKind::File { path, mode } => {
+                        assert_eq!(path, "logs/x.txt");
+                        assert_eq!(mode, StreamFileMode::Write);
+                    }
+                    other => panic!("unexpected kind: {other:?}"),
+                }
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_stream_close() {
+        let raw = r#"{"type":"streamClose","id":3,"code":0}"#;
+        match serde_json::from_str::<Incoming>(raw).unwrap() {
+            Incoming::StreamClose { id, code } => {
+                assert_eq!(id, 3);
+                assert_eq!(code, 0);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn serializes_stream_close_camel_case() {
+        let out = Outgoing::StreamClose { id: 5, code: 2 };
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap();
+        assert_eq!(v["type"], "streamClose");
+        assert_eq!(v["id"], 5);
+        assert_eq!(v["code"], 2);
+    }
+
+    #[test]
+    fn binary_stream_data_round_trips() {
+        let payload = (0u8..250).collect::<Vec<_>>();
+        let encoded = encode_stream_data(0x1122334455667788, &payload);
+        let (id, bytes) = decode_stream_data(&encoded).unwrap();
+        assert_eq!(id, 0x1122334455667788);
+        assert_eq!(bytes, payload.as_slice());
+
+        // The header is exactly 8 bytes, so a short frame decodes to empty.
+        let encoded = encode_stream_data(1, &[]);
+        let (id, bytes) = decode_stream_data(&encoded).unwrap();
+        assert_eq!((id, bytes), (1, &[][..]));
+
+        // Frames under the header length are malformed.
+        assert!(decode_stream_data(&[0, 1, 2]).is_none());
+        assert!(decode_stream_data(&[]).is_none());
     }
 }

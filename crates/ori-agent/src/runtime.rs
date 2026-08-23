@@ -13,6 +13,7 @@ use crate::error::AgentError;
 use crate::host;
 use crate::processes::{self, DetachedProc, ProcState, ProcStatus, Registry};
 use crate::setup::{SetupRunner, SetupState};
+use crate::streams::Streams;
 use crate::wire::{
     Incoming, Outgoing, EXEC_TIMEOUT_DEFAULT_SECS, EXEC_TIMEOUT_MAX_SECS, EXEC_TIMEOUT_MIN_SECS,
 };
@@ -92,10 +93,14 @@ impl Agent {
     /// Errors are surfaced as `Outgoing::Error` (with the request id) by the
     /// caller; this returns `Ok` for handled requests even when the *remote
     /// command* failed — a non-zero exit code is a result, not a failure.
+    ///
+    /// `streams` is the per-tunnel connection's stream registry; stream frames
+    /// are routed through it (see `crate::streams`).
     pub async fn handle(
         &self,
         msg: Incoming,
         tx: mpsc::Sender<Outgoing>,
+        streams: &Streams,
     ) -> Result<(), AgentError> {
         match msg {
             Incoming::Ping { id } => {
@@ -298,6 +303,28 @@ impl Agent {
                     note: probe.note,
                 })
                 .await?;
+                Ok(())
+            }
+
+            Incoming::StreamOpen { id, kind } => {
+                // The relay runs as its own task; `open` returns as soon as it
+                // is registered (or replies `streamClose` for a rejected path).
+                streams
+                    .open(id, &kind, &self.cfg.work_dir(), tx.clone())
+                    .await;
+                Ok(())
+            }
+
+            Incoming::StreamData { id, bytes } => {
+                // Binary frames are the hot path and are routed by the tunnel
+                // loop directly; a text `streamData` arrives here and takes the
+                // same bounded path.
+                streams.route_data(id, bytes).await;
+                Ok(())
+            }
+
+            Incoming::StreamClose { id, code: _ } => {
+                streams.close(id);
                 Ok(())
             }
         }

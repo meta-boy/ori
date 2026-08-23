@@ -6,10 +6,14 @@
 //! hundred sandboxes reconnecting at the same instant is a real outage, so the
 //! jitter is not decoration.
 //!
-//! Messages are one JSON object per WebSocket text frame (see `wire`). Requests
-//! are handled on spawned tasks so a long-running `exec` does not block other
+//! Messages are one JSON object per WebSocket text frame (see `wire`), except
+//! stream data, which is a binary frame (8-byte LE id + bytes). Requests are
+//! handled on spawned tasks so a long-running `exec` does not block other
 //! sandbox traffic; responses flow back through a shared channel drained by the
-//! single writer half of the socket.
+//! single writer half of the socket. Stream data has its own bounded binary
+//! channel so a busy stream cannot head-of-line-block control frames, and so
+//! backpressure (relays stop reading when the writer is slow) is bounded per
+//! stream rather than unbounded in the tunnel loop.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,7 +27,8 @@ use crate::backoff::Backoff;
 use crate::config::Config;
 use crate::error::AgentError;
 use crate::runtime::Agent;
-use crate::wire::{Incoming, Outgoing};
+use crate::streams::{Streams, OUTBOUND_BUFFER_CHUNKS};
+use crate::wire::{decode_stream_data, encode_stream_data, Incoming, Outgoing, StreamDataFrame};
 
 /// A connection that stayed up at least this long counts as healthy; its
 /// backoff resets so a later drop reconnects quickly rather than escalating.
@@ -80,6 +85,8 @@ async fn serve_once(cfg: &Config, agent: &Arc<Agent>) -> Result<(), AgentError> 
 
     let (mut sink, mut stream) = ws.split();
     let (tx, mut rx) = mpsc::channel::<Outgoing>(256);
+    let (bin_tx, mut bin_rx) = mpsc::channel::<StreamDataFrame>(OUTBOUND_BUFFER_CHUNKS);
+    let streams = Streams::new(bin_tx);
 
     // Announce ourselves on this fresh connection.
     tx.send(Outgoing::Hello {
@@ -105,8 +112,9 @@ async fn serve_once(cfg: &Config, agent: &Arc<Agent>) -> Result<(), AgentError> 
                             Ok(req) => {
                                 let tx = tx.clone();
                                 let agent = agent.clone();
+                                let streams = streams.clone();
                                 tokio::spawn(async move {
-                                    if let Err(e) = agent.handle(req, tx.clone()).await {
+                                    if let Err(e) = agent.handle(req, tx.clone(), &streams).await {
                                         let _ = tx.send(Outgoing::Error {
                                             id: request_id(&e),
                                             code: "internal".into(),
@@ -120,10 +128,22 @@ async fn serve_once(cfg: &Config, agent: &Arc<Agent>) -> Result<(), AgentError> 
                             }
                         }
                     }
+                    Some(Ok(Message::Binary(bin))) => {
+                        match decode_stream_data(&bin) {
+                            Some((id, bytes)) => {
+                                // Bounded per-stream buffer: blocks (stopping
+                                // the socket read) when the stream is full.
+                                streams.route_data(id, bytes.to_vec()).await;
+                            }
+                            None => {
+                                eprintln!("ori agent: malformed binary frame ({} bytes)", bin.len());
+                            }
+                        }
+                    }
                     Some(Ok(Message::Close(_))) => {
                         return Ok(());
                     }
-                    Some(Ok(_)) => { /* ping/pong/binary: nothing to do */ }
+                    Some(Ok(_)) => { /* ping/pong/text: nothing to do */ }
                     Some(Err(e)) => {
                         return Err(AgentError::Tunnel(format!("read: {e}")));
                     }
@@ -133,9 +153,27 @@ async fn serve_once(cfg: &Config, agent: &Arc<Agent>) -> Result<(), AgentError> 
                 }
             }
             Some(out) = rx.recv() => {
-                let text = serde_json::to_string(&out)
-                    .map_err(|e| AgentError::Tunnel(format!("encode: {e}")))?;
-                if let Err(e) = sink.send(Message::Text(text)).await {
+                match out {
+                    Outgoing::StreamData { id, bytes } => {
+                        if let Err(e) = sink.send(Message::Binary(encode_stream_data(id, &bytes))).await {
+                            return Err(AgentError::Tunnel(format!("write: {e}")));
+                        }
+                    }
+                    other => {
+                        let text = serde_json::to_string(&other)
+                            .map_err(|e| AgentError::Tunnel(format!("encode: {e}")))?;
+                        if let Err(e) = sink.send(Message::Text(text)).await {
+                            return Err(AgentError::Tunnel(format!("write: {e}")));
+                        }
+                    }
+                }
+            }
+            Some(frame) = bin_rx.recv() => {
+                // Stream data over the binary channel; encoding is cheap, and
+                // awaiting the socket here applies backpressure to the relays
+                // above (they stop reading their sources once the channel is
+                // full) instead of buffering unboundedly.
+                if let Err(e) = sink.send(Message::Binary(encode_stream_data(frame.id, &frame.bytes))).await {
                     return Err(AgentError::Tunnel(format!("write: {e}")));
                 }
             }

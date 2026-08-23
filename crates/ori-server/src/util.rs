@@ -25,3 +25,10 @@ pub fn parse_ts(s: &str) -> Option<chrono::DateTime<Utc>> {
 pub fn default_name() -> String {
     Utc::now().format("sandbox-%Y%m%d-%H%M%S").to_string()
 }
+
+/// Unique local name for a provider snapshot. Millisecond precision keeps it
+/// distinct across rapid snapshots of the same container, satisfying the
+/// `UNIQUE (sandbox_id, name)` constraint on the `snapshots` table.
+pub fn snapshot_name(prefix: &str) -> String {
+    format!("{prefix}-{}", Utc::now().timestamp_millis())
+}

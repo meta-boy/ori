@@ -7,7 +7,7 @@ mod common;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{cfg, request_until};
+use common::{cfg, request_until, Frames};
 use ori_agent::{Agent, Config, Incoming, Outgoing};
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -30,7 +30,7 @@ fn cfg_with_setup(work_dir: &std::path::Path, script: &str) -> Config {
     c
 }
 
-async fn apply_with_setup(c: Config) -> Vec<Outgoing> {
+async fn apply_with_setup(c: Config) -> Frames {
     let dir = c.work_dir.clone();
     let agent = Agent::with_logs_dir(c, dir.join("state"));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -54,11 +54,13 @@ async fn setup_script_reports_done() {
     let dir = temp_dir("setup-done");
     let frames = apply_with_setup(cfg_with_setup(&dir, "echo setup ran; exit 0")).await;
     let done = frames
+        .json
         .iter()
         .find(|f| matches!(f, Outgoing::SetupStatus { status, .. } if status == "done"));
     assert!(done.is_some(), "expected a done setupStatus: {frames:?}");
     assert!(
         frames
+            .json
             .iter()
             .any(|f| matches!(f, Outgoing::SetupStatus { status, .. } if status == "running")),
         "running must precede done"
@@ -71,6 +73,7 @@ async fn setup_script_failure_reports_error() {
     let dir = temp_dir("setup-fail");
     let frames = apply_with_setup(cfg_with_setup(&dir, "echo boom >&2; exit 3")).await;
     let failed = frames
+        .json
         .iter()
         .find(|f| matches!(f, Outgoing::SetupStatus { status, .. } if status == "failed"));
     match failed {

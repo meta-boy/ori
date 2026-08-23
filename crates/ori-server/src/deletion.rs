@@ -102,6 +102,18 @@ async fn run_deletion(state: AppState, op_id: String) {
         return;
     }
 
+    // The container is being destroyed, so its snapshots die with it. Clear
+    // the rows first, or `deletion_blocked` would flag every sandbox that was
+    // ever stopped (each now carries a persisted stopped-taken snapshot) and
+    // delete would be permanently `blocked`.
+    if let Err(e) = sqlx::query("DELETE FROM snapshots WHERE sandbox_id = ?")
+        .bind(&op.sandbox_id)
+        .execute(&state.db)
+        .await
+    {
+        tracing::error!(op = %op_id, error = %e, "deletion: clearing snapshot rows failed");
+    }
+
     // blocked state: a snapshot with dependent incrementals. v1 exposes no
     // snapshots, so nothing is ever blocked here.
     let blocked = deletion_blocked(&state, &op.sandbox_id).await;

@@ -44,9 +44,28 @@ pub async fn reap_expired(state: &AppState) -> ApiResult<()> {
             provider: row.provider.clone(),
             id: row.provider_handle.clone(),
         };
-        let _ = state.provider.snapshot(&handle, "ttl").await;
-        match state.provider.stop(&handle, StopMode::Snapshot).await {
+        // C12: power off first, then snapshot while stopped. The provider's
+        // `Snapshot` stop mode snapshots *before* powering off, which produces
+        // a running-taken snapshot that is permanently ~20x slower to clone
+        // from; the reaper instead stops with `Force` and snapshots after, so
+        // a reaped sandbox carries a fast-cloneable stopped snapshot for fork.
+        match state.provider.stop(&handle, StopMode::Force).await {
             Ok(()) => {
+                if let Ok(snap) = state
+                    .provider
+                    .snapshot(&handle, &crate::util::snapshot_name("ttl"))
+                    .await
+                {
+                    let _ = repo::insert_snapshot(
+                        &state.db,
+                        &row.account_id,
+                        &row.id,
+                        "ttl",
+                        &snap.name,
+                        true,
+                    )
+                    .await;
+                }
                 repo::set_state(&state.db, &row.id, BoxState::Stopped).await?;
             }
             Err(e) => {

@@ -138,6 +138,7 @@ async fn missing_cwd_is_an_error_not_a_crash() {
     .await;
     assert!(
         frames
+            .json
             .iter()
             .any(|f| matches!(f, Outgoing::Error { code, .. } if code == "invalid_request")),
         "expected an invalid_request error frame: {frames:?}"
@@ -163,12 +164,14 @@ async fn missing_binary_is_a_spawn_error() {
     .await;
     assert!(
         frames
+            .json
             .iter()
             .any(|f| matches!(f, Outgoing::Error { code, .. } if code == "spawn")),
         "expected a spawn error frame, not an execResult: {frames:?}"
     );
     assert!(
         !frames
+            .json
             .iter()
             .any(|f| matches!(f, Outgoing::ExecResult { .. })),
         "a failed spawn must not look like a completed command"

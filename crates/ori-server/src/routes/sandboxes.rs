@@ -19,8 +19,8 @@ use crate::pool::{ClaimResult, PoolKey};
 use crate::proto::{
     BoxState, Commands, CreateSandboxRequest, ExecRequest, ExecRequestBody, ExecResponse,
     ExtendSandboxRequest, ForkSandboxRequest, InstanceHandle, InstanceSpec, MachineType, PageInfo,
-    ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, StopMode, StopSandboxRequest,
-    StreamEvent, TypedId,
+    ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, SnapshotRef, StopMode,
+    StopSandboxRequest, StreamEvent, TypedId,
 };
 use crate::repo::{self, SandboxRow};
 use crate::slug;
@@ -449,19 +449,26 @@ pub async fn stop_sandbox(
         provider: row.provider.clone(),
         id: row.provider_handle.clone(),
     };
-    if !force {
-        // v1: snapshots are not persisted; the provider still captures one so
-        // a real backend keeps data-preserving semantics.
-        let _ = state.provider.snapshot(&handle, "autostop").await;
-    }
-    let mode = if force {
-        StopMode::Force
-    } else {
-        StopMode::Snapshot
-    };
-    if let Err(e) = state.provider.stop(&handle, mode).await {
+    // C12: power off first, then snapshot while the container is stopped.
+    // The provider's `Snapshot` stop mode snapshots *before* powering off —
+    // a running-taken snapshot is permanently ~20x slower to clone from
+    // (docs/BENCHMARKS.md §Root cause) — so `stop` uses `Force` (plain power
+    // off) and the server snapshots afterwards. Every stopped sandbox then
+    // carries a fast-cloneable snapshot for `fork` for free.
+    if let Err(e) = state.provider.stop(&handle, StopMode::Force).await {
         let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
         return Err(ApiError::provider_unavailable(e.to_string()));
+    }
+    if !force {
+        if let Ok(snap) = state
+            .provider
+            .snapshot(&handle, &crate::util::snapshot_name("stop"))
+            .await
+        {
+            let _ =
+                repo::insert_snapshot(&state.db, &row.account_id, &id, "stop", &snap.name, true)
+                    .await;
+        }
     }
     repo::set_state(&state.db, &id, BoxState::Stopped).await?;
     let fresh = repo::get_sandbox(&state.db, &id, &auth.account_id).await?;
@@ -726,19 +733,92 @@ async fn run_fork(
         provider: source.provider.clone(),
         id: source.provider_handle.clone(),
     };
-    let snap = match state.provider.snapshot(&source_handle, "fork").await {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
-            let _ = emit(
-                &tx,
-                StreamEvent::Error {
-                    id: child_id.clone(),
-                    code: "provider_unavailable".into(),
-                    message: e.to_string(),
-                },
-            );
-            return;
+    // C12: never snapshot a running source. A snapshot taken while the
+    // container is running is permanently ~20x slower to clone from, so fork
+    // clones from the newest snapshot that was taken while the source was
+    // **stopped** — the one `stop`/the TTL reaper already produced.
+    let source_running = matches!(
+        source.state_enum(),
+        BoxState::Ready | BoxState::Running | BoxState::Idle
+    );
+    let snap = match repo::latest_stopped_snapshot(&state.db, &source.id).await {
+        Ok(Some(provider_snapshot)) => {
+            let snap = SnapshotRef {
+                provider: source.provider.clone(),
+                name: provider_snapshot,
+            };
+            if source_running {
+                // Reusing the last stopped snapshot omits writes made since
+                // that stop. That is a real semantic difference and must be
+                // stated, not hidden — a fork that silently drops recent work
+                // is worse than a slow fork.
+                let _ = emit(
+                    &tx,
+                    StreamEvent::Notice {
+                        id: child_id.clone(),
+                        message: format!(
+                            "forked from the snapshot taken when {} was last stopped; \
+                             writes made since that stop are not in this fork",
+                            source.id
+                        ),
+                    },
+                );
+            }
+            snap
+        }
+        // No stopped-taken snapshot. If the source is running, snapshotting it
+        // now would produce exactly the ~45 s-slow snapshot the rule exists to
+        // avoid — so refuse and name the cost instead of silently paying it.
+        // (If the source is stopped, a fresh snapshot is safe: taken while
+        // stopped, fast to clone from.)
+        _ => {
+            if source_running {
+                let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+                let _ = emit(
+                    &tx,
+                    StreamEvent::Error {
+                        id: child_id.clone(),
+                        code: "invalid_request".into(),
+                        message: format!(
+                            "cannot fork a running sandbox that has no stopped snapshot: \
+                             snapshotting a live container makes the clone ~45 s slower. \
+                             Stop the source first (`ori stop {}`), then fork",
+                            source.id
+                        ),
+                    },
+                );
+                return;
+            }
+            match state
+                .provider
+                .snapshot(&source_handle, &crate::util::snapshot_name("fork"))
+                .await
+            {
+                Ok(s) => {
+                    let _ = repo::insert_snapshot(
+                        &state.db,
+                        &source.account_id,
+                        &source.id,
+                        "fork",
+                        &s.name,
+                        true,
+                    )
+                    .await;
+                    s
+                }
+                Err(e) => {
+                    let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+                    let _ = emit(
+                        &tx,
+                        StreamEvent::Error {
+                            id: child_id.clone(),
+                            code: "provider_unavailable".into(),
+                            message: e.to_string(),
+                        },
+                    );
+                    return;
+                }
+            }
         }
     };
 

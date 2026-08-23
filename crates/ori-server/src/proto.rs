@@ -342,6 +342,13 @@ pub enum StreamEvent {
         stop_after: Option<String>,
         commands: Commands,
     },
+    /// Non-terminal informational line, e.g. a fork that reused an older
+    /// stopped-taken snapshot and therefore omits writes made since it. The
+    /// CLI renders it as progress; it never ends the stream.
+    Notice {
+        id: String,
+        message: String,
+    },
     /// Terminal event on the stream. Once an error is known the HTTP status
     /// is long since sent, so errors ride the stream, not the status.
     Error {
@@ -893,6 +900,15 @@ mod tests {
         assert_eq!(
             ready.to_line().trim(),
             r#"{"event":"ready","id":"ori_a1b2c3d4","state":"ready","ip":"10.0.0.12","url":"https://some-slug.example.com","desktopUrl":null,"stopAfter":"2026-08-23T12:00:00Z","commands":{"ssh":"ori ssh ori_a1b2c3d4","forward":"ori forward ori_a1b2c3d4 --remote 3000"}}"#
+        );
+
+        let notice = StreamEvent::Notice {
+            id: "ori_a1b2c3d4".into(),
+            message: "forked from an older stopped snapshot".into(),
+        };
+        assert_eq!(
+            notice.to_line().trim(),
+            r#"{"event":"notice","id":"ori_a1b2c3d4","message":"forked from an older stopped snapshot"}"#
         );
 
         let err = StreamEvent::Error {

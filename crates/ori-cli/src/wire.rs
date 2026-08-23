@@ -236,6 +236,13 @@ pub enum Event {
         #[serde(default)]
         commands: Option<HashMap<String, String>>,
     },
+    /// Non-terminal informational line (e.g. a fork reusing an older
+    /// stopped-taken snapshot). Rendered as progress, never terminal.
+    Notice {
+        #[serde(default)]
+        id: Option<String>,
+        message: String,
+    },
     Error {
         #[serde(default)]
         id: Option<String>,
@@ -295,6 +302,18 @@ mod tests {
                 );
             }
             _ => panic!("expected ready"),
+        }
+
+        let notice: Event = serde_json::from_str(
+            r#"{"event":"notice","id":"ori_a1b2c3d4","message":"forked from an older stopped snapshot"}"#,
+        )
+        .unwrap();
+        match notice {
+            Event::Notice { id, message } => {
+                assert_eq!(id.as_deref(), Some("ori_a1b2c3d4"));
+                assert!(message.contains("older stopped snapshot"));
+            }
+            _ => panic!("expected notice"),
         }
 
         let error: Event =

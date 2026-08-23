@@ -30,6 +30,7 @@ async fn spawn_detached(agent: &Agent, cmd: Vec<String>) -> i64 {
     )
     .await;
     match frames
+        .json
         .iter()
         .find(|f| matches!(f, Outgoing::ExecResult { .. }))
     {
@@ -56,6 +57,7 @@ async fn status(agent: &Agent, pid: i64) -> Outgoing {
         },
     )
     .await
+    .json
     .into_iter()
     .find(|f| matches!(f, Outgoing::ExecStatusResult { .. }))
     .expect("expected execStatusResult")

@@ -261,6 +261,12 @@ pub async fn stream_progress(ctx: &Ctx, res: Response) -> Result<StreamResult, C
                     commands,
                 });
             }
+            Ok(Event::Notice { id, message }) => {
+                let who = id.unwrap_or_else(|| "sandbox".to_string());
+                if !ctx.json {
+                    println!("{who}: {message}");
+                }
+            }
             Ok(Event::Error { id, code, message }) => {
                 let who = id.unwrap_or_else(|| "sandbox".to_string());
                 if ctx.json {

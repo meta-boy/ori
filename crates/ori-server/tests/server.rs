@@ -707,6 +707,37 @@ async fn fork_returns_202_and_leaves_source_untouched() {
     let token = bootstrap_key(&t.app).await;
     let (src, _) = create_sandbox(&t.app, &token, json!({ "type": "small" })).await;
 
+    // A running source with no stopped snapshot must refuse, not snapshot the
+    // live container (a running-taken snapshot is ~20x slower to clone from).
+    let (status, stream) = call(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/fork"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let events = parse_stream(&stream);
+    assert_eq!(events.last().unwrap()["event"], "error");
+    assert_eq!(events.last().unwrap()["code"], "invalid_request");
+    let (_, v) = sandbox_info(&t.app, &token, &src).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+
+    // stop produces a stopped-taken snapshot; fork of the stopped source then
+    // clones from it (no fresh snapshot, no `cloning` on a live container).
+    let (_, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
     let (status, stream) = call(
         &t.app,
         req(
@@ -725,11 +756,72 @@ async fn fork_returns_202_and_leaves_source_untouched() {
     assert_eq!(events[0]["ttlSeconds"], 3600);
     assert_ne!(child_id, src);
     assert_eq!(events.last().unwrap()["event"], "ready");
+    // the stopped source carries its latest state, so nothing is omitted and
+    // no notice is warranted
+    assert!(!events.iter().any(|e| e["event"] == "notice"));
 
-    // source is untouched and still running
+    // source is untouched and still stopped
+    let (_, v) = sandbox_info(&t.app, &token, &src).await;
+    assert_eq!(v["sandbox"]["state"], "stopped");
+    // child is ready and independent
+    let (_, v) = sandbox_info(&t.app, &token, child_id).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+}
+
+#[tokio::test]
+async fn fork_of_running_source_clones_stopped_snapshot_and_notices() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (src, _) = create_sandbox(&t.app, &token, json!({})).await;
+
+    // stop -> resume so the source is running AND has a stopped snapshot.
+    let (_, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    let (status, _) = call(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/resume"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // fork the RUNNING source: clones the stopped-taken snapshot, so the
+    // stream carries a notice that writes since that stop are not included.
+    let (status, stream) = call(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{src}/fork"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let events = parse_stream(&stream);
+    let child_id = events[0]["id"].as_str().unwrap();
+    assert_eq!(events.last().unwrap()["event"], "ready");
+    let notice = events.iter().find(|e| e["event"] == "notice").unwrap();
+    assert!(notice["message"]
+        .as_str()
+        .unwrap()
+        .contains("not in this fork"));
+
+    // source is untouched and still running; child is ready and independent
     let (_, v) = sandbox_info(&t.app, &token, &src).await;
     assert_eq!(v["sandbox"]["state"], "ready");
-    // child is ready and independent
     let (_, v) = sandbox_info(&t.app, &token, child_id).await;
     assert_eq!(v["sandbox"]["state"], "ready");
 }
