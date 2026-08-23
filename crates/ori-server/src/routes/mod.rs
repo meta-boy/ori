@@ -39,6 +39,15 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/sandboxes/:id/exec", post(sandboxes::exec_sandbox))
         .route("/api/v1/sandboxes/:id/ports", post(crate::proxy::host_port))
+        // Raw TCP splice: the transport under ssh, scp and forward.
+        .route(
+            "/api/v1/sandboxes/:id/tcp/:port",
+            get(crate::tunnel::tcp_splice),
+        )
+        .route(
+            "/api/v1/sandboxes/:id/sshkey",
+            post(crate::tunnel::authorize_ssh_key),
+        )
         .route(
             "/api/v1/sandboxes/:id/exec/:pid",
             get(sandboxes::exec_status),
