@@ -136,12 +136,44 @@ of these pre-started and claiming one per `ori new`.
 
 ## Backends
 
-| Backend | State |
-|---|---|
-| Proxmox LXC | implemented, verified against a live host |
-| Docker | in progress |
-| Firecracker | stub, accurate capabilities |
-| Apple Containers | stub, accurate capabilities |
+| Backend | Impl | Verified against a real backend? | Feature |
+|---|---|---|---|
+| Proxmox LXC | 1,582 lines | **Yes.** Conformance + full lifecycle pass on a live host; every budget holds | `proxmox` (**default**) |
+| Docker | 901 lines | **Yes.** Conformance + full lifecycle pass against a real local daemon (28.2.2) | `docker` |
+| Firecracker | 2,379 lines | **No.** Tests written; needs a Linux host with KVM, jailer, kernel + a rootfs running the exec shim | `firecracker` |
+| Apple Containers | 850 lines | **No.** Test written; needs the `container` CLI (macOS 26, Apple silicon), which is not installed here | `apple-container` |
+
+Measured, same machine-shape, same run:
+
+| Step | Proxmox LXC | Docker |
+|---|---|---|
+| create | 5.87 s | 0.18 s |
+| snapshot | 0.70 s | 0.14 s |
+| clone_from | 1.71 s | 0.05 s |
+| start | 3.39 s | 0.08 s |
+| exec | 1.70 s | 0.03 s |
+| stop | 2.89 s | 2.16 s |
+| resume | 3.47 s | 0.07 s |
+
+**Only `proxmox` is compiled into the shipped binary.** `default = ["proxmox"]`
+in `crates/ori-providers/Cargo.toml`, and `ori-server` takes default features,
+so the other three are absent from a plain `cargo build` — the abstraction is
+pluggable, but swapping backends is a rebuild, not configuration. All three do
+compile and their tests compile (`--features docker|firecracker|apple-container`,
+checked).
+
+Their test files are `#![cfg(feature = ...)]`, so with the feature off the file
+compiles to **nothing** — `cargo test` reports `0 passed; 0 ignored` for them,
+which reads like coverage in a run log and is not. Even with the feature on the
+tests are `#[ignore]`d and need a real backend, so they only run when asked:
+
+```
+cargo test -p ori-providers --features docker -- --ignored
+```
+
+Proxmox's own real-host tests are `#[ignore]`d too, and need
+`ORI_PVE_INSECURE=1` alongside the `ORI_PVE_*` config — the PVE cert is
+self-signed, and without it the run dies at `error sending request`.
 
 ## Known gaps with evidence
 
