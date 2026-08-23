@@ -207,6 +207,10 @@ writes `handle.to_string()` into `provider_handle` is a bug.
 - **`scripts/golden-build.sh`** looks for a separate `target/release/ori-agent`
   artifact, which no longer exists (one binary now). It should bake the `ori`
   binary and invoke `ori agent --config ...`; left to the ops owner.
+  **RESOLVED (C25):** `golden-build.sh` now defaults to the freshest
+  `x86_64-unknown-linux-musl` `ori` binary from `build-all.sh`, installs it as
+  `/usr/local/bin/ori`, and the `ori-agent` unit runs the autostart supervisor
+  (`image/ori-agent`) which waits for `/etc/ori/agent.json`.
 - **`ori-agent` is a placeholder.** `ori agent` runs and exits with an honest
   "not landed yet" message; the real guest agent (exec / port-host / file ops)
   is C6's deliverable. The wiring (Linux-gated entrypoint, no `ori-providers`
@@ -351,3 +355,34 @@ What would have caught all three cheaply:
 - **The end-to-end test is the acceptance criterion, not a follow-up.** All three
   were found by running the binaries against real hardware and looking at what
   actually happened on the host — none by reading code or running unit tests.
+
+## C25: the image side is done; the agent.json injection side is still open
+
+`plans/C25-agent-autostart.md` closes the sandbox side of the tunnel seam: the
+golden image now bakes the `ori` binary (`/usr/local/bin/ori`, `x86_64-unknown-
+linux-musl`) and the `ori-agent` boot unit starts a supervisor
+(`image/ori-agent`, `/usr/local/sbin/ori-agent`) that waits for
+`/etc/ori/agent.json`, restarts `ori agent` on exit, and logs to
+`/var/log/ori-agent/agent.log`. `scripts/golden-clone-check.sh` proves on a real
+clone that the agent connects to a running control plane the moment a valid
+config is dropped in, and reconnects after a reboot.
+
+**The injection side is still open, and it belongs to the control plane.**
+Writing `/etc/ori/agent.json` into a claimed sandbox is not done by the image —
+it arrives at claim time, after a pooled clone boots. The file that must produce
+it is `crates/ori-server/src/routes/sandboxes.rs` (the claim/create path that
+mints the per-sandbox `agent_token` in `repo.rs::insert_sandbox` and knows the
+sandbox id, so it is the natural owner of the config write). It must write:
+
+- path: `/etc/ori/agent.json`
+- mode: **0600, root-owned** (it carries a credential; `crates/ori-agent/src/
+  config.rs` re-chmods on load, but the writer should not rely on that)
+- shape (camelCase, exactly as `crates/ori-agent/src/config.rs` parses):
+  `controlPlaneUrl` (`ws://`/`wss://` tunnel endpoint), `token`, `sandboxId`,
+  `workDir`.
+
+Until that lands, a pooled clone carries a live supervisor but no tunnel: `exec`
+silently falls back to the slow provider path and `ssh`/`scp`/`forward`/`host`
+have no transport — the same shape as the four unreachable components above.
+The seam now has an owner (`crates/ori-server/src/routes/sandboxes.rs`); the
+injection itself is the remaining card.

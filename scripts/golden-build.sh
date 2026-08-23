@@ -523,13 +523,14 @@ if [ "$ORI_AGENT" = "1" ]; then
     cat > /etc/systemd/system/ori-agent.service <<'UNIT'
 [Unit]
 Description=ori guest agent (tunnel to control plane)
-After=network-online.target
-Wants=network-online.target
+After=multi-user.target
+
 [Service]
 Type=simple
 ExecStart=/usr/local/sbin/ori-agent
 Restart=always
 RestartSec=5
+
 [Install]
 WantedBy=multi-user.target
 UNIT

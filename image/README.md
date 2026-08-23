@@ -1,14 +1,58 @@
 # image/ — what the golden image bakes in
 
 Files in this directory are owned by the golden-image desktop card
-(`plans/C18-desktop.md`) and baked into every sandbox by
-`scripts/golden-build.sh`:
+(`plans/C18-desktop.md`) and the agent-autostart card (`plans/C25-agent-autostart.md`)
+and baked into every sandbox by `scripts/golden-build.sh`:
 
 | file | role |
 |---|---|
+| `ori-agent` | the agent autostart supervisor: waits for `/etc/ori/agent.json`, restarts `ori agent` on exit, logs to `/var/log/ori-agent/agent.log`. `/usr/local/sbin/ori-agent` in the image |
 | `ori-desktop` | the desktop supervisor: `Xvfb -> x11vnc -> websockify(noVNC)`, all loopback-only, started at boot by systemd (ubuntu) / openrc (alpine). `/usr/local/sbin/ori-desktop` in the image |
 | `wscheck.py` | proves `websockify` completes a real RFC 6455 WebSocket upgrade (used by the golden clone-check) |
 | `README.md` | this file: the stack, the decisions, and the image-size cost |
+
+## The agent — a pooled clone is tunnel-ready with no provisioning step
+
+Every sandbox runs the guest agent (`ori agent`, a role of the single `ori`
+binary at `/usr/local/bin/ori`) and dials out to the control plane, so
+`exec`/`ssh`/`scp`/`forward`/`host` ride the ~0.11 s tunnel instead of the slow
+provider fallback. The autostart supervisor (`image/ori-agent`) is started at
+boot by the `ori-agent` unit (systemd on ubuntu, openrc on alpine), alongside
+`sshd`, `docker` and `ori-desktop`, and it must get three things right:
+
+- **Wait for the config, don't fail.** A pool member is cloned *before* it is
+  claimed, so `/etc/ori/agent.json` does not exist at boot. The supervisor loops
+  until it appears; the unit is up and waiting, not failed.
+- **Restart on exit.** The agent reconnects forever with jittered backoff, but
+  cannot survive its own process dying. The supervisor restarts it; `Restart=always`
+  / openrc is a second layer for the supervisor itself.
+- **Log somewhere findable.** Everything lands in `/var/log/ori-agent/agent.log`,
+  created before anything runs — an empty agent log has cost real debugging time.
+
+### Config contract — `/etc/ori/agent.json`
+
+The control plane writes this file at claim time (see `docs/DIVERGENCES.md`
+"agent.json injection is still open"); the sandbox only consumes it. Shape is
+camelCase JSON, exactly as `crates/ori-agent/src/config.rs` parses it:
+
+```json
+{
+  "controlPlaneUrl": "wss://plane.example.com/agent/ws",
+  "token": "orit_…",
+  "sandboxId": "ori_…",
+  "workDir": "/home/work/work"
+}
+```
+
+- `controlPlaneUrl` — `ws://` or `wss://` tunnel endpoint on the control plane.
+- `token` — the sandbox's per-sandbox agent credential (not an account key).
+- `sandboxId` — this sandbox's id, echoed on every tunnel handshake.
+- `workDir` — sandbox work dir (optional; defaults to `~/.ori/work`).
+
+It carries a credential, so it is **0600, root-owned** — the supervisor enforces
+it too (`chmod 0600` before starting the agent). Writing it at claim time belongs
+to the control plane, not the image; that seam is recorded as still-open in
+`docs/DIVERGENCES.md`.
 
 ## The stack
 
@@ -111,6 +155,15 @@ alpine, and the Xorg client libs on both). The biggest single lever left is
 the window-manager choice already made above; `--no-desktop` skips the whole
 block if an operator wants the lean tier.
 
+The **agent is tiny by comparison**: a single static musl `ori` binary
+(`/usr/local/bin/ori`, ~13.6 MiB) plus the ~1 KiB supervisor. The exact delta
+is reported on every build as `agent rootfs: before=… after=… delta=…`, and the
+C25 clone-check proves the binary actually connects, so the number is not the
+only thing keeping it honest. It was left unmeasured for too long — "the agent
+is ~14 MB, but say so rather than leaving it unknown." Measured 2026-08-23 on
+the rebuilt ubuntu golden: **+13,628 KiB (~13.3 MiB)** (`agent rootfs:
+before=1735252KiB after=1748880KiB delta=13628KiB`).
+
 ## noVNC assets — pinned, checksummed
 
 - **alpine:** shipped by the distro `novnc` package → `/usr/share/novnc`
@@ -127,3 +180,9 @@ loopback **only**, and `websockify` completes a WebSocket handshake against the
 VNC backend (`python3 image/wscheck.py`). Because websockify only answers a
 WebSocket upgrade (HTTP 101) after it has connected to x11vnc, the handshake
 passing is the end-to-end proof.
+
+The same clone-check proves the agent autostarts: the supervisor is up and
+*waiting* at boot (config absent — a pool member is cloned before it is
+claimed); dropping a valid `/etc/ori/agent.json` in makes the agent connect to
+a real control plane with no other action; and a reboot makes it reconnect on
+its own.

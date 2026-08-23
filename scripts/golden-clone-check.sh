@@ -231,7 +231,7 @@ if [ "$agent_present" = "yes" ]; then
   [ -n "$HOST_IP" ] || { echo "  [fail] could not determine host bridge IP for the control plane"; fail=1; }
 
   if [ -n "$HOST_IP" ]; then
-    pve_ssh "cd $CC_DIR && setsid ./ori serve --provider mock --bind $HOST_IP:$CC_PORT --db-path $CC_DIR/serve.db > $CC_DIR/serve.log 2>&1 < /dev/null & echo \$! > $CC_DIR/pid"
+    pve_ssh "cd $CC_DIR && setsid ./ori serve --provider mock --bind $HOST_IP:$CC_PORT --db-path $CC_DIR/serve.db > $CC_DIR/serve.log 2>&1 < /dev/null & echo \$! > $CC_DIR/serve.pid"
     plane_ok=no
     for _i in $(seq 1 30); do
       pve_ssh "grep -q 'control plane listening' $CC_DIR/serve.log 2>/dev/null" && { plane_ok=yes; break; }

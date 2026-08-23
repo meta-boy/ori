@@ -26,6 +26,7 @@
 //! because a silent no-op is how the pool sat empty for 110 seconds.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,6 +47,10 @@ use crate::state::AppState;
 /// wedged agent applies backpressure instead of growing without limit.
 const OUTBOUND_BUFFER: usize = 64;
 
+/// Chunks buffered per inbound stream before the tunnel reader blocks, which
+/// applies backpressure to the agent rather than growing without bound.
+const STREAM_BUFFER: usize = 16;
+
 /// How long a tunnel request waits before falling back to the provider.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(620);
 
@@ -61,17 +66,66 @@ struct Pending {
     stderr: String,
 }
 
+/// Per-stream inbound sinks, keyed by the stream id the control plane assigned.
+type StreamSinks = Arc<Mutex<HashMap<u64, mpsc::Sender<Vec<u8>>>>>;
+
 /// A live agent connection.
 #[derive(Clone)]
 struct AgentConn {
     tx: mpsc::Sender<Value>,
+    /// Outbound binary frames (8-byte LE stream id + payload).
+    bin_tx: mpsc::Sender<Vec<u8>>,
     pending: Arc<Mutex<HashMap<String, Pending>>>,
+    streams: StreamSinks,
+}
+
+/// One multiplexed byte stream to a sandbox.
+///
+/// This is the single primitive behind `host`, `ssh`, `scp` and `forward`: the
+/// agent dials the target on loopback *inside* the sandbox, so the control
+/// plane needs no route into the sandbox network and the sandbox opens no port.
+pub struct TunnelStream {
+    id: u64,
+    bin_tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<Value>,
+    rx: mpsc::Receiver<Vec<u8>>,
+    streams: StreamSinks,
+}
+
+impl TunnelStream {
+    /// Bytes toward the sandbox. `false` once the tunnel is gone.
+    pub async fn send(&self, bytes: &[u8]) -> bool {
+        let mut frame = Vec::with_capacity(8 + bytes.len());
+        frame.extend_from_slice(&self.id.to_le_bytes());
+        frame.extend_from_slice(bytes);
+        self.bin_tx.send(frame).await.is_ok()
+    }
+
+    /// Bytes from the sandbox. `None` on clean close or a dropped tunnel.
+    pub async fn recv(&mut self) -> Option<Vec<u8>> {
+        self.rx.recv().await
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Tell the agent to close, and stop routing to this stream.
+    pub async fn close(mut self, code: u16) {
+        let _ = self
+            .tx
+            .send(json!({"type": "streamClose", "id": self.id, "code": code}))
+            .await;
+        self.streams.lock().await.remove(&self.id);
+        self.rx.close();
+    }
 }
 
 /// Sandbox id -> live tunnel. Cloned into `AppState`.
 #[derive(Clone, Default)]
 pub struct AgentRegistry {
     inner: Arc<RwLock<HashMap<String, AgentConn>>>,
+    next_stream_id: Arc<AtomicU64>,
 }
 
 impl AgentRegistry {
@@ -140,6 +194,39 @@ impl AgentRegistry {
             "detach": detach,
         });
         self.request(sandbox_id, &id, frame).await
+    }
+
+    /// Open a TCP stream to `port` on loopback inside the sandbox.
+    ///
+    /// `None` means no live tunnel — the caller should report that plainly
+    /// rather than handing back a URL or a socket that cannot work.
+    pub async fn open_tcp(&self, sandbox_id: &str, port: u16) -> Option<TunnelStream> {
+        let conn = { self.inner.read().await.get(sandbox_id).cloned() }?;
+        // Stream ids are chosen by the control plane, per the agent contract.
+        let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let (sink, rx) = mpsc::channel::<Vec<u8>>(STREAM_BUFFER);
+        conn.streams.lock().await.insert(id, sink);
+
+        let opened = conn
+            .tx
+            .send(json!({
+                "type": "streamOpen",
+                "id": id,
+                "kind": {"type": "tcp", "port": port},
+            }))
+            .await
+            .is_ok();
+        if !opened {
+            conn.streams.lock().await.remove(&id);
+            return None;
+        }
+        Some(TunnelStream {
+            id,
+            bin_tx: conn.bin_tx.clone(),
+            tx: conn.tx.clone(),
+            rx,
+            streams: conn.streams.clone(),
+        })
     }
 
     async fn insert(&self, sandbox_id: &str, conn: AgentConn) {
@@ -230,7 +317,9 @@ pub async fn agent_tunnel(
 async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Value>(OUTBOUND_BUFFER);
+    let (bin_tx, mut bin_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_BUFFER);
     let pending: Arc<Mutex<HashMap<String, Pending>>> = Default::default();
+    let streams: StreamSinks = Default::default();
 
     state
         .agents
@@ -238,23 +327,35 @@ async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
             &sandbox_id,
             AgentConn {
                 tx,
+                bin_tx,
                 pending: pending.clone(),
+                streams: streams.clone(),
             },
         )
         .await;
     tracing::info!(sandbox = %sandbox_id, "agent tunnel connected");
 
-    // Outbound: control plane -> agent.
+    // Outbound: control plane -> agent. Text frames are requests; binary frames
+    // are stream payloads, which must not be base64'd into JSON on the hot path.
     let writer = tokio::spawn(async move {
-        while let Some(frame) = rx.recv().await {
-            let text = match serde_json::to_string(&frame) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!(error = %e, "agent frame serialise failed");
-                    continue;
-                }
+        loop {
+            let msg = tokio::select! {
+                f = rx.recv() => match f {
+                    Some(frame) => match serde_json::to_string(&frame) {
+                        Ok(t) => Message::Text(t),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "agent frame serialise failed");
+                            continue;
+                        }
+                    },
+                    None => break,
+                },
+                b = bin_rx.recv() => match b {
+                    Some(bytes) => Message::Binary(bytes),
+                    None => break,
+                },
             };
-            if sink.send(Message::Text(text)).await.is_err() {
+            if sink.send(msg).await.is_err() {
                 break;
             }
         }
@@ -275,6 +376,13 @@ async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
+                if kind == "streamClose" {
+                    if let Some(sid) = v.get("id").and_then(|x| x.as_u64()) {
+                        // Dropping the sender ends the consumer's `recv()`.
+                        streams.lock().await.remove(&sid);
+                    }
+                    continue;
+                }
                 if kind == "hello" {
                     let version = v
                         .get("version")
@@ -340,15 +448,31 @@ async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
                     }
                 }
             }
-            Ok(Message::Binary(_)) => {
-                // Stream frames land here. Routing arrives with ssh/scp/forward;
-                // until then, count them so an unrouted stream is visible.
+            Ok(Message::Binary(buf)) => {
+                // 8-byte little-endian stream id, then the payload.
                 binary_frames += 1;
-                if binary_frames == 1 {
-                    tracing::warn!(
+                if buf.len() < 8 {
+                    tracing::warn!(sandbox = %sandbox_id, len = buf.len(), "short stream frame");
+                    continue;
+                }
+                let mut idb = [0u8; 8];
+                idb.copy_from_slice(&buf[..8]);
+                let sid = u64::from_le_bytes(idb);
+                let sink = { streams.lock().await.get(&sid).cloned() };
+                match sink {
+                    // `send` awaits when the consumer is behind, which stops us
+                    // reading the socket and pushes backpressure to the agent
+                    // rather than buffering without bound.
+                    Some(s) => {
+                        if s.send(buf[8..].to_vec()).await.is_err() {
+                            streams.lock().await.remove(&sid);
+                        }
+                    }
+                    None => tracing::debug!(
                         sandbox = %sandbox_id,
-                        "agent sent stream data but no stream router is wired yet"
-                    );
+                        stream = sid,
+                        "stream data for an unknown stream"
+                    ),
                 }
             }
             Ok(Message::Close(_)) | Err(_) => break,
@@ -357,6 +481,9 @@ async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
     }
 
     state.agents.remove(&sandbox_id).await;
+    // Ending every stream is what lets an in-flight proxy or ssh session see
+    // the disconnect instead of hanging on a channel nobody will feed again.
+    streams.lock().await.clear();
     writer.abort();
     tracing::info!(sandbox = %sandbox_id, binary_frames, "agent tunnel disconnected");
 }
