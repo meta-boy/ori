@@ -1449,8 +1449,10 @@ name = "ori-providers"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "bollard",
  "futures-util",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

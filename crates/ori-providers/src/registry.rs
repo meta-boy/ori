@@ -24,7 +24,25 @@
 //!     registry.register(Arc::new(provider))?;
 //! }
 //! # #[cfg(feature = "firecracker")]
-//! registry.register(Arc::new(ori_providers::firecracker::FirecrackerProvider::new()))?;
+//! {
+//!     let cfg = ori_providers::firecracker::FirecrackerConfig {
+//!         jailer_path: "/usr/bin/jailer".into(),
+//!         firecracker_path: "/usr/bin/firecracker".into(),
+//!         kernel_path: "/opt/vmlinux".into(),
+//!         rootfs_path: "/opt/rootfs.ext4".into(),
+//!         boot_args: "console=ttyS0".into(),
+//!         chroot_base_dir: "/srv/jailer".into(),
+//!         uid: 123,
+//!         gid: 100,
+//!         tap: None,
+//!         exec_port: 8086,
+//!         guest_cid: 3,
+//!         exec_timeout_secs: 60,
+//!         boot_timeout_secs: 30,
+//!         terminate_grace_secs: 5,
+//!     };
+//!     registry.register(Arc::new(ori_providers::firecracker::FirecrackerProvider::new(cfg)))?;
+//! }
 //!
 //! if let Some(caps) = registry.capabilities("docker") {
 //!     // refuse live_suspend up front: docker does not persist pause state.

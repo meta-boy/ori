@@ -280,6 +280,16 @@ else
   echo "      golden built without the agent -- the pool claim path must inject it" >&2
 fi
 
+# Desktop stack: the supervisor + the WebSocket-handshake probe come from
+# image/ in the repo (see image/README.md), so the golden build is a pure
+# function of this checkout.
+if [ "$DESKTOP" = "1" ]; then
+  pve_ssh "cat > $PROV_DIR/ori-desktop" < "$ORI_SCRIPT_DIR/../image/ori-desktop"
+  pve_ssh "cat > $PROV_DIR/wscheck.py"   < "$ORI_SCRIPT_DIR/../image/wscheck.py"
+  pve_ssh "pct push $VMID $PROV_DIR/ori-desktop /tmp/ori-desktop"
+  pve_ssh "pct push $VMID $PROV_DIR/wscheck.py /tmp/wscheck.py"
+fi
+
 cat > "$LOCAL_TMP/provision.sh" <<'REMOTE'
 #!/bin/sh
 # Runs inside the freshly-created container. Env from the caller:
@@ -328,17 +338,119 @@ else
   addgroup work docker >/dev/null 2>&1 || true
 fi
 
-echo "== desktop / VNC (parity for 'ori desktop'; best effort)"
+echo "== desktop / VNC (Xvfb -> x11vnc -> websockify -> noVNC, loopback only)"
 if [ "$ORI_DESKTOP" = "1" ]; then
+  # image size before/after the desktop stack -- the delta is what every
+  # pooled clone carries (see image/README.md).
+  du -xsk / | cut -f1 > /tmp/ori-size-before
+
   if [ "$ORI_TIER" = "ubuntu" ]; then
-    if ! apt-get install -y -qq --no-install-recommends xfce4 x11vnc >/tmp/ori-apt-desktop.log 2>&1; then
-      echo "WARN: desktop install failed; continuing without it" >&2
+    if ! apt-get install -y -qq --no-install-recommends xvfb fluxbox x11vnc websockify xterm fontconfig fonts-dejavu-core >/tmp/ori-apt-desktop.log 2>&1; then
+      echo "ERROR: desktop package install failed" >&2
+      tail -n 40 /tmp/ori-apt-desktop.log >&2
+      exit 1
     fi
   else
-    if ! apk add --no-cache xfce4 x11vnc >/tmp/ori-apk-desktop.log 2>&1; then
-      echo "WARN: desktop install failed; continuing without it" >&2
+    if ! apk add --no-cache fluxbox xvfb x11vnc websockify novnc xauth xterm fontconfig font-dejavu >/tmp/ori-apk-desktop.log 2>&1; then
+      echo "ERROR: desktop package install failed" >&2
+      tail -n 40 /tmp/ori-apk-desktop.log >&2
+      exit 1
     fi
   fi
+
+  # noVNC static assets. Alpine ships them in the 'novnc' package; ubuntu's
+  # 'novnc' deb drags in nodejs, so pin the upstream release instead and
+  # verify the checksum so the build is reproducible.
+  if [ "$ORI_TIER" = "ubuntu" ]; then
+    mkdir -p /usr/share/novnc
+    if [ ! -f /usr/share/novnc/vnc.html ]; then
+      rc=0
+      for _attempt in 1 2 3; do
+        if curl -fsSL -o /tmp/novnc.tar.gz \
+            https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz; then
+          rc=0; break
+        fi
+        rc=1; sleep 2
+      done
+      [ "$rc" = 0 ] || { echo "ERROR: noVNC download failed" >&2; exit 1; }
+      printf '%s  %s\n' \
+        '6a73e41f98388a5348b7902f54b02d177cb73b7e5eb0a7a0dcf688cc2c79b42a' \
+        /tmp/novnc.tar.gz | sha256sum -c - >/dev/null 2>&1 \
+        || { echo "ERROR: noVNC tarball checksum mismatch" >&2; exit 1; }
+      tar xzf /tmp/novnc.tar.gz -C /tmp
+      cp -r /tmp/noVNC-1.5.0/* /usr/share/novnc/
+      rm -rf /tmp/noVNC-1.5.0 /tmp/novnc.tar.gz
+    fi
+  fi
+  [ -f /usr/share/novnc/vnc.html ] || { echo "ERROR: noVNC assets missing at /usr/share/novnc" >&2; exit 1; }
+
+  # supervisor script (pushed from the repo as /tmp/ori-desktop)
+  mkdir -p /usr/local/sbin
+  install -m 0755 /tmp/ori-desktop /usr/local/sbin/ori-desktop
+
+  if [ "$ORI_TIER" = "ubuntu" ]; then
+    cat > /etc/systemd/system/ori-desktop.service <<'UNIT'
+[Unit]
+Description=ori desktop stack (Xvfb -> x11vnc -> websockify -> noVNC)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/ori-desktop
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl enable ori-desktop >/dev/null 2>&1 || true
+  else
+    cat > /etc/init.d/ori-desktop <<'INIT'
+#!/sbin/openrc-run
+name="ori-desktop"
+description="ori desktop stack (Xvfb -> x11vnc -> websockify -> noVNC)"
+command="/usr/local/sbin/ori-desktop"
+depend() { need net; }
+INIT
+    chmod 0755 /etc/init.d/ori-desktop
+    rc-update add ori-desktop default >/dev/null 2>&1 || true
+  fi
+
+  # start it now; a pooled clone starts it at boot via the unit instead.
+  if [ "$ORI_TIER" = "ubuntu" ]; then
+    systemctl start ori-desktop >/dev/null 2>&1 || true
+  else
+    rc-service ori-desktop start >/dev/null 2>&1 || true
+  fi
+
+  # fail-fast verification: X is up, VNC + websockify listen on loopback, and
+  # websockify completes a WebSocket upgrade (it only answers 101 after it has
+  # connected to x11vnc, so the handshake proves the whole chain).
+  xok=0
+  for _i in $(seq 1 25); do
+    [ -S /tmp/.X11-unix/X99 ] && { xok=1; break; }
+    sleep 1
+  done
+  [ "$xok" = 1 ] || { echo "ERROR: Xvfb did not come up" >&2; exit 1; }
+
+  if [ "$ORI_TIER" = "ubuntu" ]; then
+    vnc_ss=$(ss -tln 2>/dev/null | grep :5900 || true)
+    ws_ss=$(ss -tln 2>/dev/null | grep :6080 || true)
+  else
+    vnc_ss=$(netstat -tln 2>/dev/null | grep :5900 || true)
+    ws_ss=$(netstat -tln 2>/dev/null | grep :6080 || true)
+  fi
+  if ! printf '%s\n' "$vnc_ss" | grep -qE '127\.0\.0\.1:5900|\[::1\]:5900'; then
+    echo "ERROR: x11vnc not listening on loopback (got: $(printf '%s' "$vnc_ss" | tr '\n' ' '))" >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$ws_ss" | grep -qE '127\.0\.0\.1:6080|\[::1\]:6080'; then
+    echo "ERROR: websockify not listening on loopback (got: $(printf '%s' "$ws_ss" | tr '\n' ' '))" >&2
+    exit 1
+  fi
+  python3 /tmp/wscheck.py || { echo "ERROR: websockify WebSocket handshake failed" >&2; exit 1; }
+
+  du -xsk / | cut -f1 > /tmp/ori-size-after
 fi
 
 echo "== ori agent"
@@ -386,15 +498,30 @@ id work >/dev/null || { echo "ERROR: work user missing" >&2; exit 1; }
 if [ "$ORI_AGENT" = "1" ]; then
   [ -x /usr/local/bin/ori-agent ] || { echo "ERROR: ori-agent missing" >&2; exit 1; }
 fi
-rm -f /tmp/ori-provision.sh /tmp/ori-agent
+if [ "$ORI_DESKTOP" = "1" ]; then
+  command -v Xvfb      >/dev/null || { echo "ERROR: Xvfb missing" >&2; exit 1; }
+  command -v x11vnc    >/dev/null || { echo "ERROR: x11vnc missing" >&2; exit 1; }
+  command -v websockify >/dev/null || { echo "ERROR: websockify missing" >&2; exit 1; }
+  [ -x /usr/local/sbin/ori-desktop ] || { echo "ERROR: ori-desktop missing" >&2; exit 1; }
+fi
+rm -f /tmp/ori-provision.sh /tmp/ori-agent /tmp/ori-desktop /tmp/wscheck.py
 echo "provision ok"
+if [ "$ORI_DESKTOP" = "1" ]; then
+  b=$(cat /tmp/ori-size-before); a=$(cat /tmp/ori-size-after)
+  echo "desktop rootfs: before=${b}KiB after=${a}KiB delta=$((a - b))KiB"
+fi
 REMOTE
 
 pve_ssh "cat > $PROV_DIR/provision.sh" < "$LOCAL_TMP/provision.sh"
 pve_ssh "pct push $VMID $PROV_DIR/provision.sh /tmp/ori-provision.sh"
 
 T_PROV="$(date +%s)"
-pve_ssh "pct exec $VMID -- env ORI_TIER=$TIER ORI_DESKTOP=$DESKTOP ORI_AGENT=$AGENT_FLAG sh /tmp/ori-provision.sh"
+PROV_OUT=$(pve_ssh "pct exec $VMID -- env ORI_TIER=$TIER ORI_DESKTOP=$DESKTOP ORI_AGENT=$AGENT_FLAG sh /tmp/ori-provision.sh")
+printf '%s\n' "$PROV_OUT"
+DESKTOP_SIZE=""
+if [ "$DESKTOP" = "1" ]; then
+  DESKTOP_SIZE=$(printf '%s\n' "$PROV_OUT" | grep -oE 'desktop rootfs: .*' | tail -1)
+fi
 mark "provision"
 
 # sanity: sshd is listening, and only on loopback
@@ -435,6 +562,7 @@ echo "  state       = stopped"
 echo "  rootfs      = ${ORI_STORAGE}:${ROOTFS_GB}"
 echo "  agent       = $([ "$AGENT_FLAG" = 1 ] && echo baked-in || echo "not baked (see WARN above)")"
 echo "  desktop     = $([ "$DESKTOP" = 1 ] && echo installed || echo skipped)"
+[ -n "$DESKTOP_SIZE" ] && echo "  desktop size= $DESKTOP_SIZE"
 echo
 echo "timings (wall clock):"
 prev="$T_START"

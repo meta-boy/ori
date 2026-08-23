@@ -1,0 +1,73 @@
+#!/bin/sh
+# ori desktop stack — Xvfb -> x11vnc -> websockify(noVNC), all loopback-only.
+#
+# Runs in the foreground as a small supervisor; the init system (systemd on
+# ubuntu, openrc on alpine) keeps it alive. Every component binds to 127.0.0.1
+# / ::1 exactly like sshd, so nothing on the sandbox opens a port. The ori
+# tunnel is the authentication boundary, so VNC carries no password — the same
+# posture as sshd.
+#
+# X authorisation: Xvfb starts with a freshly generated MIT-MAGIC-COOKIE so
+# x11vnc can connect without -ac (access control off). The cookie exists to
+# satisfy the X handshake, not to gate the desktop; access is still loopback
+# only. Re-used verbatim by the web client: noVNC -> websockify -> x11vnc.
+
+DISPLAY_NUM=99
+export DISPLAY=":$DISPLAY_NUM"
+XAUTH=/root/.Xauthority
+export XAUTHORITY="$XAUTH"
+VNC_PORT=5900
+WS_PORT=6080
+NOVNC_DIR=/usr/share/novnc
+SCREEN=1920x1080x24
+LOG=/var/log/ori-desktop
+XVFB_SOCK="/tmp/.X11-unix/X$DISPLAY_NUM"
+
+mkdir -p "$LOG"
+
+x_up() { [ -S "$XVFB_SOCK" ]; }
+
+# Refresh the X cookie only when (re)starting Xvfb, so an already-running Xvfb
+# keeps the cookie this supervisor gave it.
+ensure_cookie() {
+  if ! pgrep -x Xvfb >/dev/null 2>&1; then
+    cookie=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    xauth -q -f "$XAUTH" add "$DISPLAY" . "$cookie" 2>/dev/null || true
+  fi
+}
+
+wait_x() {
+  i=0
+  while [ "$i" -lt 25 ]; do
+    x_up && return 0
+    sleep 0.2
+    i=$((i + 1))
+  done
+  return 1
+}
+
+spawn() {
+  if ! pgrep -x Xvfb >/dev/null 2>&1; then
+    ensure_cookie
+    Xvfb "$DISPLAY" -auth "$XAUTH" -screen 0 "$SCREEN" -nolisten tcp \
+      >"$LOG/xvfb.log" 2>&1 &
+  fi
+  wait_x || true
+  if ! pgrep -x fluxbox >/dev/null 2>&1; then
+    fluxbox >"$LOG/fluxbox.log" 2>&1 &
+  fi
+  if ! pgrep -x x11vnc >/dev/null 2>&1; then
+    x11vnc -auth "$XAUTH" -forever -shared -nopw -quiet -localhost \
+      -rfbport "$VNC_PORT" >"$LOG/x11vnc.log" 2>&1 &
+  fi
+  if ! pgrep -f "websockify.*:$WS_PORT" >/dev/null 2>&1; then
+    websockify --web "$NOVNC_DIR" "127.0.0.1:$WS_PORT" "127.0.0.1:$VNC_PORT" \
+      >"$LOG/websockify.log" 2>&1 &
+  fi
+}
+
+# Supervisor loop: spawn anything that is missing, re-check every 5s.
+while :; do
+  spawn
+  sleep 5
+done

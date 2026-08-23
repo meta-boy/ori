@@ -11,11 +11,14 @@ proxmox = ["dep:reqwest"]
 # Docker Engine backend over the docker API (C7). Container names are the
 # opaque instance ids; snapshots are committed images.
 docker = ["dep:bollard"]
-# Firecracker microVM backend (C7, stub: declares accurate capabilities, every
-# operation returns `ProviderNotImplemented`).
-firecracker = []
-# macOS container backend (C7, stub: declares accurate capabilities, every
-# operation returns `ProviderNotImplemented`).
+# Firecracker microVM backend (C17): snapshot-create/snapshot-load suspend and
+# resume over the per-VM control API, spawned under the jailer. `libc` is used
+# for signalling the daemonized Firecracker process (pidfile → kill); `base64`
+# is the vsock exec frame codec.
+firecracker = ["dep:libc", "dep:base64"]
+# Apple container backend (C17): shells out to the `container` CLI (macOS 26,
+# Apple silicon). Declares honestly: no snapshot primitive is documented, so
+# fs_snapshot and live_suspend stay false.
 apple-container = []
 
 [dependencies]
@@ -28,6 +31,8 @@ tracing = { workspace = true }
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"], optional = true }
 bollard = { version = "0.21", optional = true }
+libc = { version = "0.2", optional = true }
+base64 = { version = "0.22", optional = true }
 futures-util = "0.3"
 
 [dev-dependencies]
