@@ -52,11 +52,11 @@ echo "using scratch clone vmid $CLONE (test range, cleaned up after)"
 
 cleanup() {
   echo "cleaning up scratch clone $CLONE"
-  cid_destroy "$CLONE" 2>/dev/null || true
   # kill the C25 control plane + scratch dir started on the host, if any
   if [ -n "${CC_DIR:-}" ]; then
-    pve_ssh "kill \$(cat $CC_DIR/serve.pid 2>/dev/null) 2>/dev/null; pkill -f '$CC_DIR/serve.db' 2>/dev/null; rm -rf $CC_DIR" 2>/dev/null || true
+    pve_ssh "kill \$(cat $CC_DIR/serve.pid 2>/dev/null) 2>/dev/null; pkill -f '$CC_DIR/serve.db' 2>/dev/null; rm -rf $CC_DIR; echo host-cleanup-ok" 2>/dev/null || true
   fi
+  cid_destroy "$CLONE" 2>/dev/null || true
   rm -rf "${LOCAL_TMP:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
