@@ -151,9 +151,28 @@ of these pre-started and claiming one per `ori new`.
 - ~~`exec` goes over SSH per call~~ **RESOLVED.** The agent tunnel landed;
   `exec` is 0.11 s, verified with a real agent in a real LXC. The provider path
   stays as the fallback when a sandbox has no live tunnel.
-- **The agent does not start by itself yet.** The tunnel was verified by pushing
-  the binary and config in by hand, so a sandbox created by `ori new` currently
-  has no agent and silently takes the 2.7 s fallback. `plans/C25` closes this.
+- ~~**The agent does not start by itself**~~ **RESOLVED** (`plans/C25`). The
+  whole chain is baked into the golden image and was confirmed by mounting the
+  golden's rootfs read-only (`ori-golden-alpine-300`, `/dev/pve/vm-300-disk-0`):
+
+  | Path | What is there |
+  | --- | --- |
+  | `/usr/local/bin/ori` | the real binary, 13,950,704 bytes |
+  | `/usr/local/sbin/ori-agent` | supervisor: waits for the config, then runs `ori agent`, restarting it forever and logging to `/var/log/ori-agent/agent.log` |
+  | `/etc/init.d/ori-agent` + `/etc/runlevels/default/ori-agent` | enabled at boot |
+  | `/etc/ori/` | **empty**, which is correct — a pool member is cloned before it is claimed |
+
+  The supervisor exists because of that last row: `/etc/ori/agent.json` cannot
+  exist at boot for a pooled clone, so the unit waits for it instead of failing,
+  and the control plane writes it at claim time
+  (`crates/ori-server/src/routes/sandboxes.rs:319`). A clone therefore boots to a
+  live supervisor and becomes tunnel-ready the moment the config lands, with no
+  provisioning step.
+
+  Scope of this check: the artifacts were verified present and enabled in the
+  golden. It is not a recording of a fresh `ori new` being watched to dial in --
+  the earlier end-to-end timings (`exec` 0.11 s, ssh, scp, forward) were taken
+  against a hand-placed agent, before this path existed.
 - ~~**~1,200 lines of duplicated wire types**~~ **RESOLVED.** Every shared wire
   shape now has exactly one definition, in `ori-proto`; the server and CLI both
   import it. `ori-cli/src/wire.rs` went 513 -> 211 lines (25 duplicate
