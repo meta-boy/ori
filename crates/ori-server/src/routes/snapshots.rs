@@ -19,6 +19,10 @@
 //!   the HTTP body. `tree` consumes the same stream, parsing tar headers
 //!   incrementally rather than holding the archive.
 
+use ori_proto::{
+    NamedSnapshot, NamedSnapshotList, SaveSnapshotRequest, SaveSnapshotResponse, Snapshot,
+    SnapshotDeleted, SnapshotDetail, SnapshotList, SnapshotTree, SnapshotTreeFile,
+};
 use std::convert::Infallible;
 
 use axum::body::{Body, Bytes};
@@ -27,7 +31,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::stream::unfold;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use crate::auth::ApiKeyAuth;
@@ -43,86 +47,6 @@ const NAMED_SNAPSHOT_CAP: i64 = 10;
 // ---------------------------------------------------------------------------
 // Wire types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    pub id: String,
-    pub sandbox_id: String,
-    pub name: Option<String>,
-    pub provider_snapshot: String,
-    pub state: String,
-    pub is_incremental: bool,
-    pub parent_id: Option<String>,
-    pub created_at: String,
-    pub completed_at: Option<String>,
-    pub taken_while_stopped: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotList {
-    pub snapshots: Vec<Snapshot>,
-    pub page_info: PageInfo,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotDetail {
-    pub snapshot: Snapshot,
-}
-
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct NamedSnapshot {
-    pub name: String,
-    pub snapshot_id: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NamedSnapshotList {
-    pub named_snapshots: Vec<NamedSnapshot>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveSnapshotResponse {
-    pub snapshot: Snapshot,
-    pub named: NamedSnapshot,
-    /// Always empty in this build; the client renders a note itself. Kept for
-    /// the wire shape so a future server-provided warning has a home.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notice: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveSnapshotRequest {
-    pub sandbox_id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotTreeFile {
-    pub path: String,
-    pub size: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotTree {
-    pub snapshot: Snapshot,
-    pub files: Vec<SnapshotTreeFile>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotDeleted {
-    pub deleted: bool,
-}
 
 // ---------------------------------------------------------------------------
 // Repository helpers (kept here, not in `repo.rs`, so this card stays in its
@@ -252,7 +176,7 @@ async fn get_named_snapshot(
     account_id: &str,
     name: &str,
 ) -> Option<NamedSnapshot> {
-    sqlx::query_as::<_, NamedSnapshot>(
+    sqlx::query_as::<_, NamedSnapshotRow>(
         "SELECT name, snapshot_id, created_at FROM named_snapshots \
          WHERE account_id = ? AND name = ?",
     )
@@ -262,22 +186,40 @@ async fn get_named_snapshot(
     .await
     .ok()
     .flatten()
+    .map(Into::into)
+}
+
+#[derive(sqlx::FromRow)]
+struct NamedSnapshotRow {
+    name: String,
+    snapshot_id: String,
+    created_at: String,
+}
+
+impl From<NamedSnapshotRow> for NamedSnapshot {
+    fn from(r: NamedSnapshotRow) -> Self {
+        NamedSnapshot {
+            name: r.name,
+            snapshot_id: r.snapshot_id,
+            created_at: r.created_at,
+        }
+    }
 }
 
 async fn query_named_snapshots(db: &SqlitePool, account_id: &str) -> ApiResult<Vec<NamedSnapshot>> {
-    let rows = sqlx::query_as::<_, NamedSnapshot>(
+    let rows = sqlx::query_as::<_, NamedSnapshotRow>(
         "SELECT name, snapshot_id, created_at FROM named_snapshots \
          WHERE account_id = ? ORDER BY created_at DESC, rowid DESC",
     )
     .bind(account_id)
     .fetch_all(db)
     .await?;
-    Ok(rows)
+    Ok(rows.into_iter().map(Into::into).collect())
 }
 
 /// Oldest named snapshot, used to say *which* one to remove when the cap is hit.
 async fn oldest_named_snapshot(db: &SqlitePool, account_id: &str) -> Option<NamedSnapshot> {
-    sqlx::query_as::<_, NamedSnapshot>(
+    sqlx::query_as::<_, NamedSnapshotRow>(
         "SELECT name, snapshot_id, created_at FROM named_snapshots \
          WHERE account_id = ? ORDER BY created_at ASC, rowid ASC LIMIT 1",
     )
@@ -286,6 +228,7 @@ async fn oldest_named_snapshot(db: &SqlitePool, account_id: &str) -> Option<Name
     .await
     .ok()
     .flatten()
+    .map(Into::into)
 }
 
 async fn count_named_snapshots(db: &SqlitePool, account_id: &str) -> ApiResult<i64> {

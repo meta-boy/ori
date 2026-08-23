@@ -13,6 +13,7 @@ name = "ori"
 path = "src/main.rs"
 
 [dependencies]
+ori-proto = { path = "../ori-proto" }
 ori-server = { path = "../ori-server" }
 ori-agent = { path = "../ori-agent" }
 clap = { version = "4", features = ["derive", "env"] }

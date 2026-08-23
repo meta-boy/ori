@@ -263,10 +263,10 @@ mod tests {
             url: Some("https://some-slug.example.com".into()),
             desktop_url: None,
             stop_after: Some("2026-08-23T12:00:00Z".into()),
-            commands: Commands {
+            commands: Some(Commands {
                 ssh: "ori ssh ori_a1b2c3d4".into(),
                 forward: "ori forward ori_a1b2c3d4 --remote 3000".into(),
-            },
+            }),
         };
         assert_eq!(
             ready.to_line().trim(),
@@ -274,7 +274,7 @@ mod tests {
         );
 
         let notice = StreamEvent::Notice {
-            id: "ori_a1b2c3d4".into(),
+            id: Some("ori_a1b2c3d4".into()),
             message: "forked from an older stopped snapshot".into(),
         };
         assert_eq!(
@@ -283,7 +283,7 @@ mod tests {
         );
 
         let err = StreamEvent::Error {
-            id: "ori_a1b2c3d4".into(),
+            id: Some("ori_a1b2c3d4".into()),
             code: "provider_unavailable".into(),
             message: "boom".into(),
         };

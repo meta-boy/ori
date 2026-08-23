@@ -9,103 +9,25 @@
 use std::io::{self, Write};
 
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
+use ori_proto::{
+    SaveSnapshotRequest, SaveSnapshotResponse, Snapshot, SnapshotList, SnapshotTree,
+    SnapshotTreeFile,
+};
 use tokio::io::AsyncWriteExt;
 
 use crate::cli::{SnapshotCommand, SnapshotsArgs};
 use crate::context::Ctx;
 use crate::error::CliError;
+
+// The names this module already used for the shared shapes.
+type SnapshotListResponse = SnapshotList;
+type SnapshotTreeResponse = SnapshotTree;
+type TreeFile = SnapshotTreeFile;
 use crate::render::{print_json, table_string};
 
 // ---------------------------------------------------------------------------
 // Wire DTOs (mirror `routes/snapshots.rs`; kept local so this card owns them)
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    pub id: String,
-    pub sandbox_id: String,
-    pub name: Option<String>,
-    pub provider_snapshot: String,
-    pub state: String,
-    pub is_incremental: bool,
-    pub parent_id: Option<String>,
-    pub created_at: String,
-    pub completed_at: Option<String>,
-    pub taken_while_stopped: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotListResponse {
-    pub snapshots: Vec<Snapshot>,
-    pub page_info: PageInfo,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PageInfo {
-    pub has_more: bool,
-    #[serde(default)]
-    pub limit: Option<u32>,
-    #[serde(default)]
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotDetail {
-    pub snapshot: Snapshot,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NamedSnapshot {
-    pub name: String,
-    pub snapshot_id: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NamedSnapshotListResponse {
-    pub named_snapshots: Vec<NamedSnapshot>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveSnapshotRequest {
-    pub sandbox_id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveSnapshotResponse {
-    pub snapshot: Snapshot,
-    pub named: NamedSnapshot,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotTreeResponse {
-    pub snapshot: Snapshot,
-    pub files: Vec<TreeFile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TreeFile {
-    pub path: String,
-    pub size: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotDeleted {
-    pub deleted: bool,
-}
 
 // ---------------------------------------------------------------------------
 // `ori snapshots [id]`

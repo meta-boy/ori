@@ -384,11 +384,11 @@ fn finish_stream(result: &StreamResult) {
             if let Some(ip) = &r.ip {
                 println!("  ip:     {ip}");
             }
-            if let Some(cmd) = r.commands.as_ref().and_then(|m| m.get("ssh")) {
-                println!("  ssh:    {cmd}");
-            }
-            if let Some(cmd) = r.commands.as_ref().and_then(|m| m.get("forward")) {
-                println!("  forward: {cmd}");
+            // Typed fields, not string keys: a misspelt key used to render
+            // nothing at all rather than fail to compile.
+            if let Some(c) = r.commands.as_ref() {
+                println!("  ssh:    {}", c.ssh);
+                println!("  forward: {}", c.forward);
             }
         }
         None => println!("done"),
@@ -405,8 +405,8 @@ fn render_table(sandboxes: &[Sandbox]) {
         .map(|s| {
             vec![
                 s.id.clone(),
-                s.state.clone(),
-                s.ty.clone(),
+                s.state.as_str().to_string(),
+                s.machine_type.as_str().to_string(),
                 s.ip.clone().unwrap_or_default(),
                 s.url.clone().unwrap_or_default(),
                 stops_in(&s.stop_after),
@@ -438,10 +438,15 @@ fn render_info(s: &Sandbox) {
     let rows = [
         ("id", s.id.clone()),
         ("name", s.name.clone()),
-        ("state", s.state.clone()),
+        ("state", s.state.as_str().to_string()),
         (
             "type",
-            format!("{} ({} vCPU, {} GB)", s.ty, s.vcpu, s.memory_gb),
+            format!(
+                "{} ({} vCPU, {} GB)",
+                s.machine_type.as_str(),
+                s.vcpu,
+                s.memory_gb
+            ),
         ),
         ("url", s.url.clone().unwrap_or_else(|| "-".to_string())),
         ("ip", s.ip.clone().unwrap_or_else(|| "-".to_string())),

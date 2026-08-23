@@ -248,6 +248,28 @@ when each crate needed one. This is the same root cause as bug 2
 implemented twice. Collapsing it removes an entire class of failure instead of
 fixing two instances of it.
 
+**RESOLVED for the wire types** (the trait itself is next). Every shared shape
+now has one definition in `ori-proto`. What the collapse turned up is the
+argument for having done it earlier: the duplication was not merely redundant,
+it was *hiding four defects*, and each one had the same signature — a value one
+side computes that the other side has no field to receive.
+
+| Defect | How the duplication hid it |
+| --- | --- |
+| `exec --status` always printed an empty state | The server computed the state into `_state_name` and threw it away; its `ExecResponse` had no `state` field. The client's separate copy declared `state` with `#[serde(default)]`, so the absent value decoded to `""` instead of failing. |
+| A lost pid reported **success** | `exit_code` was `i64` server-side, `Option<i64>` client-side. The server sent `unwrap_or(0)`, and `0` means success. |
+| Env requests could not round-trip their own output | The client's copies had `skip_serializing_if` (write side), the server's had `default` (read side). Each copy was internally consistent and jointly wrong. |
+| The self-update URL had nowhere to land | A third copy of the version response in `ori-proto` — dead, unused, and missing `release_base_url`. Anyone wiring it up would have lost the field. |
+
+Note what every row has in common: **both copies round-tripped themselves
+perfectly.** A serialisation test on either side alone passes. That is why 224
+tests were green with all four present, and why the fix is structural — one
+definition — rather than another test.
+
+Two whole feature areas, environments and snapshots, had repeated the pattern
+in a worse place still: their shapes were declared inline in the command and
+route files, not even in `wire.rs`, which is why they escaped the first count.
+
 ### 8. The warm pool — wired into `new`, but still cannot fill (PARTIAL)
 
 `crates/ori-server/src/pool/` implements `PoolManager` and its 5 tests pass,

@@ -14,12 +14,12 @@
 //!   accumulates unbounded pending deliveries, and a slow receiver never
 //!   delays a sandbox reaching `ready`.
 
+use ori_proto::{CreateWebhookRequest, Webhook, WebhookCreated, WebhookList, WebhookRotated};
 use std::time::Duration;
 
 use axum::extract::{Extension, Path, State};
 use axum::Json;
 use hmac::{Hmac, Mac};
-use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tokio::time::MissedTickBehavior;
 
@@ -64,49 +64,6 @@ fn gen_secret() -> String {
 // ---------------------------------------------------------------------------
 // wire DTOs
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Webhook {
-    pub id: String,
-    pub url: String,
-    pub events: String,
-    pub prefix: String,
-    pub last_four: String,
-    pub created_at: String,
-    pub state: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookList {
-    pub webhooks: Vec<Webhook>,
-}
-
-/// The secret is present exactly once, on creation.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookCreated {
-    pub id: String,
-    pub url: String,
-    pub events: String,
-    pub prefix: String,
-    pub last_four: String,
-    pub secret: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookRotated {
-    pub webhook: WebhookCreated,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateWebhookRequest {
-    pub url: String,
-}
 
 // ---------------------------------------------------------------------------
 // handlers

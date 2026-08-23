@@ -21,11 +21,17 @@
 //!   nothing from the account — and the agent's apply treats the claim as
 //!   authoritative, so previously-applied secret files are scrubbed.
 
+pub use ori_proto::{EnvFile, EnvRepo, EnvVar, Environment, Toggles, UpgradeReport};
+
+// The shared names, under the local `*Dto` names this module already uses.
+pub type EnvironmentDto = Environment;
+pub type VarDto = EnvVar;
+pub type FileDto = EnvFile;
+pub type RepoDto = EnvRepo;
 use std::collections::HashMap;
 
 use base64::Engine as _;
 use futures_util::future::BoxFuture;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
@@ -123,62 +129,6 @@ pub struct RepoRow {
 // ---------------------------------------------------------------------------
 // safety toggles
 // ---------------------------------------------------------------------------
-
-/// The safety toggles a version travels with. Serialised as JSON on the
-/// version row, so the toggles that minted a version are immutable with it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Toggles {
-    /// Inject env vars at all. Off means the bundle's vars are withheld.
-    #[serde(default = "default_on")]
-    pub inject_vars: bool,
-    /// Inject files at all. Off means the bundle's files are withheld.
-    #[serde(default = "default_on")]
-    pub inject_files: bool,
-    /// Inject secret vars and secret files. Off means secrets are withheld
-    /// from every claim — the same withholding an upgrade applies to removed
-    /// secrets, as a persistent toggle.
-    #[serde(default = "default_on")]
-    pub inject_secrets: bool,
-}
-
-fn default_on() -> bool {
-    true
-}
-
-impl Default for Toggles {
-    fn default() -> Self {
-        Toggles {
-            inject_vars: true,
-            inject_files: true,
-            inject_secrets: true,
-        }
-    }
-}
-
-impl Toggles {
-    pub fn names() -> &'static [&'static str] {
-        &["inject_vars", "inject_files", "inject_secrets"]
-    }
-
-    fn set(&mut self, name: &str, on: bool) -> Option<()> {
-        match name {
-            "inject_vars" => {
-                self.inject_vars = on;
-                Some(())
-            }
-            "inject_files" => {
-                self.inject_files = on;
-                Some(())
-            }
-            "inject_secrets" => {
-                self.inject_secrets = on;
-                Some(())
-            }
-            _ => None,
-        }
-    }
-}
 
 fn parse_toggles(raw: &str) -> Toggles {
     serde_json::from_str(raw).unwrap_or_default()
@@ -1030,105 +980,55 @@ pub async fn upgrade(state: &AppState, account_id: &str, name: &str) -> ApiResul
     })
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpgradeReport {
-    pub environment: String,
-    pub version: i64,
-    pub sandboxes: usize,
-    pub applied: usize,
-}
-
 // ---------------------------------------------------------------------------
 // DTOs for routes (secret values never leave the server)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VarDto {
-    pub key: String,
-    pub secret: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileDto {
-    pub path: String,
-    pub secret: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RepoDto {
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvironmentDto {
-    pub name: String,
-    pub is_default: bool,
-    pub version: i64,
-    pub created_at: String,
-    pub updated_at: String,
-    pub vars: Vec<VarDto>,
-    pub files: Vec<FileDto>,
-    pub repos: Vec<RepoDto>,
-    pub toggles: Toggles,
-}
-
-impl EnvironmentDto {
-    pub fn from_row(env: &EnvironmentRow, bundle: &Bundle) -> EnvironmentDto {
-        EnvironmentDto {
-            name: env.name.clone(),
-            is_default: env.is_default,
-            version: 0,
-            created_at: env.created_at.clone(),
-            updated_at: env.updated_at.clone(),
-            vars: bundle
-                .vars
-                .iter()
-                .map(|v| VarDto {
-                    key: v.key.clone(),
-                    secret: v.is_secret,
-                    value: if v.is_secret {
-                        None
-                    } else {
-                        Some(v.value.clone())
-                    },
-                })
-                .collect(),
-            files: bundle
-                .files
-                .iter()
-                .map(|f| FileDto {
-                    path: f.path.clone(),
-                    secret: f.is_secret,
-                    content: if f.is_secret {
-                        None
-                    } else {
-                        Some(f.content.clone())
-                    },
-                })
-                .collect(),
-            repos: bundle
-                .repos
-                .iter()
-                .map(|r| RepoDto {
-                    url: r.url.clone(),
-                    branch: r.branch.clone(),
-                    path: r.path.clone(),
-                })
-                .collect(),
-            toggles: bundle.toggles.clone(),
-        }
+/// A free function, not an inherent `impl`: the type is shared now and lives
+/// in `ori-proto`, which knows nothing about rows or bundles.
+pub fn environment_dto(env: &EnvironmentRow, bundle: &Bundle) -> EnvironmentDto {
+    EnvironmentDto {
+        name: env.name.clone(),
+        is_default: env.is_default,
+        version: 0,
+        created_at: env.created_at.clone(),
+        updated_at: env.updated_at.clone(),
+        vars: bundle
+            .vars
+            .iter()
+            .map(|v| VarDto {
+                key: v.key.clone(),
+                secret: v.is_secret,
+                value: if v.is_secret {
+                    None
+                } else {
+                    Some(v.value.clone())
+                },
+            })
+            .collect(),
+        files: bundle
+            .files
+            .iter()
+            .map(|f| FileDto {
+                path: f.path.clone(),
+                secret: f.is_secret,
+                content: if f.is_secret {
+                    None
+                } else {
+                    Some(f.content.clone())
+                },
+            })
+            .collect(),
+        repos: bundle
+            .repos
+            .iter()
+            .map(|r| RepoDto {
+                url: r.url.clone(),
+                branch: r.branch.clone(),
+                path: r.path.clone(),
+            })
+            .collect(),
+        toggles: bundle.toggles.clone(),
     }
 }
 
@@ -1140,7 +1040,7 @@ pub async fn dto_for_env(db: &SqlitePool, env: &EnvironmentRow) -> ApiResult<Env
         Some(v) => bundle_for_version(db, &v.id).await?,
         None => Bundle::default(),
     };
-    let mut dto = EnvironmentDto::from_row(env, &bundle);
+    let mut dto = environment_dto(env, &bundle);
     dto.version = version;
     Ok(dto)
 }

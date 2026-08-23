@@ -18,9 +18,10 @@ use crate::ndjson::ndjson_response;
 use crate::pool::{ClaimResult, PoolKey};
 use crate::proto::{
     BoxState, Commands, CreateSandboxRequest, ExecRequest, ExecRequestBody, ExecResponse,
-    ExecResult, ExtendResponse, ExtendSandboxRequest, ForkSandboxRequest, HostCapacity,
-    InstanceHandle, InstanceSpec, MachineType, PageInfo, Provider, ResumeSandboxRequest, Sandbox,
-    SandboxDetail, SandboxList, SnapshotRef, StopMode, StopSandboxRequest, StreamEvent, TypedId,
+    ExecResult, ExecStatusResponse, ExtendResponse, ExtendSandboxRequest, ForkSandboxRequest,
+    HostCapacity, InstanceHandle, InstanceSpec, MachineType, PageInfo, Provider,
+    ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, SnapshotRef, StopMode,
+    StopSandboxRequest, StreamEvent, TypedId,
 };
 use crate::repo::{self, SandboxRow};
 use crate::slug;
@@ -130,7 +131,7 @@ async fn run_create(
             let _ = emit(
                 &tx,
                 StreamEvent::Error {
-                    id: id.clone(),
+                    id: Some(id.clone()),
                     code: "internal".into(),
                     message: e.message,
                 },
@@ -277,7 +278,7 @@ async fn run_create(
             let _ = emit(
                 &tx,
                 StreamEvent::Error {
-                    id: id.clone(),
+                    id: Some(id.clone()),
                     code: "provider_unavailable".into(),
                     message: e.to_string(),
                 },
@@ -302,7 +303,7 @@ async fn run_create(
             let _ = emit(
                 &tx,
                 StreamEvent::Error {
-                    id: id.clone(),
+                    id: Some(id.clone()),
                     code: "provider_unavailable".into(),
                     message: format!("could not start the cloned sandbox: {e}"),
                 },
@@ -385,7 +386,7 @@ async fn finish_ready(
             url: Some(url),
             desktop_url,
             stop_after,
-            commands: commands_for(id),
+            commands: Some(commands_for(id)),
         },
     );
     crate::routes::webhook::emit(state, id, "ready").await;
@@ -637,7 +638,7 @@ async fn run_resume(
         let _ = emit(
             &tx,
             StreamEvent::Error {
-                id: id.clone(),
+                id: Some(id.clone()),
                 code: "provider_unavailable".into(),
                 message: format!("instance lost and no snapshot is available in this build: {e}"),
             },
@@ -697,7 +698,7 @@ async fn run_resume(
             url,
             desktop_url,
             stop_after,
-            commands: commands_for(&id),
+            commands: Some(commands_for(&id)),
         },
     );
     crate::routes::webhook::emit(&state, &id, "ready").await;
@@ -792,7 +793,7 @@ async fn run_fork(
             let _ = emit(
                 &tx,
                 StreamEvent::Error {
-                    id: child_id.clone(),
+                    id: Some(child_id.clone()),
                     code: "internal".into(),
                     message: e.message,
                 },
@@ -848,7 +849,7 @@ async fn run_fork(
                 let _ = emit(
                     &tx,
                     StreamEvent::Notice {
-                        id: child_id.clone(),
+                        id: Some(child_id.clone()),
                         message: format!(
                             "forked from the snapshot taken when {} was last stopped; \
                              writes made since that stop are not in this fork",
@@ -873,7 +874,7 @@ async fn run_fork(
                     let _ = emit(
                         &tx,
                         StreamEvent::Error {
-                            id: child_id.clone(),
+                            id: Some(child_id.clone()),
                             code: "invalid_request".into(),
                             message: format!(
                                 "cannot fork a running sandbox that has no stopped snapshot \
@@ -894,7 +895,7 @@ async fn run_fork(
                         let _ = emit(
                             &tx,
                             StreamEvent::Error {
-                                id: child_id.clone(),
+                                id: Some(child_id.clone()),
                                 code,
                                 message,
                             },
@@ -925,7 +926,7 @@ async fn run_fork(
                         let _ = emit(
                             &tx,
                             StreamEvent::Error {
-                                id: child_id.clone(),
+                                id: Some(child_id.clone()),
                                 code: "provider_unavailable".into(),
                                 message: e.to_string(),
                             },
@@ -954,7 +955,7 @@ async fn run_fork(
             let _ = emit(
                 &tx,
                 StreamEvent::Error {
-                    id: child_id.clone(),
+                    id: Some(child_id.clone()),
                     code: "provider_unavailable".into(),
                     message: e.to_string(),
                 },
@@ -974,7 +975,7 @@ async fn run_fork(
         let _ = emit(
             &tx,
             StreamEvent::Error {
-                id: child_id.clone(),
+                id: Some(child_id.clone()),
                 code: "provider_unavailable".into(),
                 message: format!("fork: cannot start clone: {e}"),
             },
@@ -1025,7 +1026,7 @@ async fn run_fork(
             url: Some(url),
             desktop_url,
             stop_after,
-            commands: commands_for(&child_id),
+            commands: Some(commands_for(&child_id)),
         },
     );
     crate::routes::webhook::emit(&state, &child_id, "ready").await;
@@ -1062,7 +1063,7 @@ async fn stop_snapshot_restart_for_fork(
     if !emit(
         tx,
         StreamEvent::Notice {
-            id: child_id.to_string(),
+            id: Some(child_id.to_string()),
             message: format!(
                 "{} has never been stopped, so it has no fast snapshot; \
                  stopping it for a moment to take one for this fork, then restarting it",
@@ -1338,7 +1339,7 @@ pub async fn exec_status(
     State(state): State<AppState>,
     auth: Extension<ApiKeyAuth>,
     Path((id, pid)): Path<(String, i64)>,
-) -> ApiResult<Json<ExecResponse>> {
+) -> ApiResult<Json<ExecStatusResponse>> {
     let _row = fetch(&state, &id, &auth.account_id).await?;
     #[derive(sqlx::FromRow)]
     struct ProcRow {
@@ -1359,19 +1360,19 @@ pub async fn exec_status(
     .await?
     .ok_or_else(|| ApiError::not_found(format!("process {pid} on sandbox {id}")))?;
 
-    let (_state_name, completed) = match row.status.as_str() {
+    let (state_name, _completed) = match row.status.as_str() {
         "completed" => ("exited", true),
         "failed" => ("failed", true),
         "killed" => ("failed", true),
         _ => ("running", false),
     };
-    Ok(Json(ExecResponse {
+    // `state` is why this endpoint exists; it used to be computed and dropped.
+    Ok(Json(ExecStatusResponse {
         pid: row.pid,
-        completed,
-        exit_code: row.exit_code.unwrap_or(0),
+        state: state_name.to_string(),
+        exit_code: row.exit_code,
         stdout: row.stdout.unwrap_or_default(),
         stderr: row.stderr.unwrap_or_default(),
-        duration_ms: 0,
     }))
 }
 

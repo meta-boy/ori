@@ -1,104 +1,37 @@
-//! Wire DTOs, NDJSON events, and request shapes for the control-plane API.
+//! The client's view of the wire contract.
 //!
-//! TODO(reconcile): these types mirror `crates/ori-proto` (being written in
-//! parallel). When it lands, replace this module with re-exports of
-//! `ori_proto` and delete the local definitions.
+//! The shared shapes come from `ori-proto`. They used to be declared a second
+//! time here and the copies drifted: this file required `memoryGB` while the
+//! server emitted `memoryGb`, and `ori list` broke outright. Both sides
+//! round-tripped their own copy perfectly, which is why no test caught it.
+//!
+//! What is left below is genuinely client-only -- the shape of rendered output
+//! (`ori status`, `ReadyInfo`) that no endpoint returns, and request bodies the
+//! server accepts structurally without naming.
+
+pub use ori_proto::{
+    Account, ApiKey, ApiKeyCreated, ApiKeyList, ApiKeyRotated, BoxState, CliVersionResponse,
+    Commands, DataRetentionStatus, ExecRequestBody, ExecResponse, ExecStatusResponse,
+    ExtendResponse, LoginPollResponse, LoginStartRequest, LoginStartResponse, MachineType,
+    Operation, OperationDetail, PageInfo, Sandbox, SandboxDetail, SandboxList, StreamEvent, Team,
+    TeamList, Webhook, WebhookCreated, WebhookList, WebhookRotated,
+};
+
+// Aliases where the client historically used a different name for the same
+// shape. Kept so call sites do not churn for a rename that buys nothing.
+pub type SandboxListResponse = SandboxList;
+pub type SandboxResponse = SandboxDetail;
+pub type OperationResponse = OperationDetail;
+pub type ApiKeyListResponse = ApiKeyList;
+pub type TeamListResponse = TeamList;
+pub type WebhookListResponse = WebhookList;
+pub type ExecRequest = ExecRequestBody;
+/// The NDJSON lifecycle stream, named `Event` at every call site here.
+pub type Event = StreamEvent;
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-
-/// `GET /sandboxes` page. `pageInfo{hasMore,limit,nextCursor}`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SandboxListResponse {
-    pub sandboxes: Vec<Sandbox>,
-    pub page_info: PageInfo,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PageInfo {
-    pub has_more: bool,
-    pub limit: Option<u32>,
-    pub next_cursor: Option<String>,
-}
-
-/// The sandbox object from `docs/SPEC-API.md`. Field names are load-bearing:
-/// the real client parses these and serialises them back out verbatim.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Sandbox {
-    pub id: String,
-    pub name: String,
-    pub state: String,
-    #[serde(rename = "type")]
-    pub ty: String,
-    pub vcpu: u32,
-    #[serde(rename = "memoryGB")]
-    pub memory_gb: u32,
-    pub billing_multiplier: f64,
-    pub slug: String,
-    pub url: Option<String>,
-    pub ip: Option<String>,
-    pub ssh_endpoint: Option<String>,
-    pub desktop_available: bool,
-    pub desktop_url: Option<String>,
-    pub environment: String,
-    pub environment_version: i32,
-    pub created_at: String,
-    pub updated_at: String,
-    pub stop_after: Option<String>,
-    pub snapshot_available: bool,
-    pub last_snapshot_attempt_at: Option<String>,
-    pub last_snapshot_status: Option<String>,
-    pub snapshot_completed_at: Option<String>,
-    pub setup_status: Option<String>,
-    pub setup_error: Option<String>,
-    pub provider: String,
-    pub team: Option<String>,
-}
-
-/// `GET /sandboxes/{id}` wraps the sandbox — the wrapper is load-bearing.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SandboxResponse {
-    pub sandbox: Sandbox,
-}
-
-/// `POST /sandboxes/{id}/extend` — the new deadline is stated at the top level
-/// so a caller can see what `extend` produced without re-reading the sandbox.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExtendResponse {
-    pub sandbox: Sandbox,
-    #[serde(default)]
-    pub stop_after: Option<String>,
-}
-
-/// `GET /operations/{id}` — async deletion operation status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OperationResponse {
-    pub operation: Operation,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Operation {
-    pub id: String,
-    pub sandbox_id: String,
-    /// pending | processing | blocked | completed
-    pub status: String,
-    #[serde(default)]
-    pub blocked_reason: Option<String>,
-    #[serde(default)]
-    pub error: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -130,61 +63,6 @@ pub struct CreateRequest {
     /// instead of stopping, snapshotting and restarting it. Ignored on new
     /// and resume.
     pub no_stop: bool,
-}
-
-/// `POST /sandboxes/{id}/exec`. Wire shape TODO(reconcile) with ori-proto.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecRequest {
-    pub command: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    pub timeout: u32,
-    pub detach: bool,
-}
-
-/// `POST /sandboxes/{id}/exec` / `GET /sandboxes/{id}/exec/{pid}` result.
-/// Wire shape TODO(reconcile) with ori-proto.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecResponse {
-    pub pid: u64,
-    #[serde(default)]
-    pub state: String,
-    #[serde(default)]
-    pub exit_code: Option<i32>,
-    #[serde(default)]
-    pub stdout: Option<String>,
-    #[serde(default)]
-    pub stderr: Option<String>,
-}
-
-/// `POST /cli/login/start`. Wire shape TODO(reconcile) with ori-proto.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginStartRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginStartResponse {
-    pub id: String,
-    pub code: String,
-    pub url: String,
-    #[serde(default)]
-    pub verification_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginPollResponse {
-    pub status: String,
-    #[serde(default)]
-    pub token: Option<String>,
 }
 
 /// `GET /me` — account identity for `ori status`. Wire shape TODO(reconcile).
@@ -232,186 +110,6 @@ pub struct ConfigStatus {
     pub path: String,
 }
 
-/// `GET /api-keys` — prefix + last four only; the secret is never returned
-/// again after creation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiKeyListResponse {
-    pub api_keys: Vec<ApiKey>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiKey {
-    pub id: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    pub prefix: String,
-    pub last_four: String,
-    pub created_at: String,
-    #[serde(default)]
-    pub revoked_at: Option<String>,
-}
-
-/// `POST /api-keys` — the secret is present exactly once, at creation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiKeyCreated {
-    pub id: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    pub prefix: String,
-    pub last_four: String,
-    pub secret: String,
-    pub created_at: String,
-}
-
-/// `POST /api-keys/{id}/rotate` — a fresh key plus whether the rotated key was
-/// the one authenticating this request (the caller's stored token is now dead).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiKeyRotated {
-    pub api_key: ApiKeyCreated,
-    pub current: bool,
-}
-
-// ---------------------------------------------------------------------------
-// webhooks
-// ---------------------------------------------------------------------------
-
-/// `GET /webhooks` — prefix + last four only; the signing secret is never
-/// returned again after creation/rotation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookListResponse {
-    pub webhooks: Vec<Webhook>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Webhook {
-    pub id: String,
-    pub url: String,
-    pub events: String,
-    pub prefix: String,
-    pub last_four: String,
-    pub created_at: String,
-    #[serde(default)]
-    pub state: String,
-}
-
-/// `POST /webhooks` — the signing secret is present exactly once.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookCreated {
-    pub id: String,
-    pub url: String,
-    pub events: String,
-    pub prefix: String,
-    pub last_four: String,
-    pub secret: String,
-    pub created_at: String,
-}
-
-/// `POST /webhooks/{id}/rotate` — a fresh signing secret (shown once).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookRotated {
-    pub webhook: WebhookCreated,
-}
-
-// ---------------------------------------------------------------------------
-// teams / data retention / self-update
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamListResponse {
-    pub teams: Vec<Team>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Team {
-    pub id: String,
-    pub name: String,
-    pub scope: String,
-    pub role: String,
-}
-
-/// `GET /account/data-retention`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DataRetentionStatus {
-    pub enabled: bool,
-}
-
-/// `GET /cli/version` — the self-update channel check.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CliVersionResponse {
-    pub current: String,
-    pub latest: String,
-    pub channel: String,
-    pub update_available: bool,
-    #[serde(default)]
-    pub release_base_url: Option<String>,
-}
-
-/// NDJSON lifecycle events for `new` / `resume` / `fork`. Serialises to the
-/// exact lines quoted in `docs/SPEC-API.md`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(
-    tag = "event",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum Event {
-    Created {
-        id: String,
-        #[serde(default)]
-        ttl_seconds: Option<u64>,
-        #[serde(default)]
-        team: Option<String>,
-    },
-    State {
-        id: String,
-        state: String,
-    },
-    Accepted {
-        id: String,
-        status: String,
-    },
-    Ready {
-        id: String,
-        #[serde(default)]
-        state: String,
-        #[serde(default)]
-        ip: Option<String>,
-        #[serde(default)]
-        url: Option<String>,
-        #[serde(default)]
-        desktop_url: Option<String>,
-        #[serde(default)]
-        stop_after: Option<String>,
-        #[serde(default)]
-        commands: Option<HashMap<String, String>>,
-    },
-    /// Non-terminal informational line (e.g. a fork reusing an older
-    /// stopped-taken snapshot). Rendered as progress, never terminal.
-    Notice {
-        #[serde(default)]
-        id: Option<String>,
-        message: String,
-    },
-    Error {
-        #[serde(default)]
-        id: Option<String>,
-        code: String,
-        message: String,
-    },
-}
-
 /// Human-renderable summary of the terminal `ready` event.
 #[derive(Debug, Clone)]
 pub struct ReadyInfo {
@@ -421,7 +119,7 @@ pub struct ReadyInfo {
     pub url: Option<String>,
     pub desktop_url: Option<String>,
     pub stop_after: Option<String>,
-    pub commands: Option<HashMap<String, String>>,
+    pub commands: Option<Commands>,
 }
 
 pub fn valid_types() -> &'static [&'static str] {
@@ -457,10 +155,11 @@ mod tests {
             } => {
                 assert_eq!(id, "ori_a1b2c3d4");
                 assert_eq!(ip.as_deref(), Some("10.0.0.12"));
-                assert_eq!(
-                    commands.as_ref().unwrap().get("ssh").unwrap(),
-                    "ori ssh ori_a1b2c3d4"
-                );
+                let c = commands.as_ref().unwrap();
+                assert_eq!(c.ssh, "ori ssh ori_a1b2c3d4");
+                // `forward` is absent from the line above on purpose: a partial
+                // `commands` object must not fail the terminal event.
+                assert_eq!(c.forward, "");
             }
             _ => panic!("expected ready"),
         }
@@ -499,15 +198,15 @@ mod tests {
             "snapshotCompletedAt":null,"setupStatus":"done","setupError":null,"provider":"proxmox",
             "team":null}"#;
         let s: Sandbox = serde_json::from_str(raw).unwrap();
-        assert_eq!(s.ty, "default");
+        assert_eq!(s.machine_type.as_str(), "default");
         assert_eq!(s.memory_gb, 8);
         assert_eq!(s.billing_multiplier, 1.0);
         assert_eq!(s.ip.as_deref(), Some("10.0.0.12"));
         // And serialises back out with the same field names.
         let out = serde_json::to_value(&s).unwrap();
         assert!(out.get("type").is_some(), "must serialise `type`, not `ty`");
-        assert!(out.get("memoryGB").is_some());
+        assert!(out.get("memoryGB").is_some(), "not `memoryGb` -- this exact\n             letter broke `ori list` when each side had its own copy");
         assert!(out.get("billingMultiplier").is_some());
-        assert!(out.get("ty").is_none());
+        assert!(out.get("machineType").is_none());
     }
 }

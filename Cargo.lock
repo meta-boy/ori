@@ -1422,6 +1422,7 @@ dependencies = [
  "directories",
  "futures-util",
  "ori-agent",
+ "ori-proto",
  "ori-server",
  "reqwest",
  "serde",

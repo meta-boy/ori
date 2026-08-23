@@ -41,6 +41,8 @@ pub async fn login(args: LoginArgs, ctx: &mut Ctx) -> Result<(), CliError> {
                     None
                 },
                 email: args.email.clone(),
+                client_name: Some("ori".into()),
+                client_version: Some(env!("CARGO_PKG_VERSION").into()),
             },
         )
         .await?;
@@ -48,8 +50,9 @@ pub async fn login(args: LoginArgs, ctx: &mut Ctx) -> Result<(), CliError> {
     if ctx.json {
         print_json(&start)?;
     } else {
-        let verify = start.verification_url.as_deref().unwrap_or(&start.url);
-        println!("Go to {verify} and enter code {}", start.code);
+        // There was a `verification_url` fallback here; no endpoint ever sent
+        // that field, so the branch always resolved to `url`.
+        println!("Go to {} and enter code {}", start.url, start.code);
     }
 
     // Poll until a token is issued.

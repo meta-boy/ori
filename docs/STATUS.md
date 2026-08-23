@@ -154,9 +154,37 @@ of these pre-started and claiming one per `ori new`.
 - **The agent does not start by itself yet.** The tunnel was verified by pushing
   the binary and config in by hand, so a sandbox created by `ori new` currently
   has no agent and silently takes the 2.7 s fallback. `plans/C25` closes this.
-- **~1,200 lines of duplicated wire types** across `ori-server/src/proto.rs` and
-  `ori-cli/src/wire.rs` while `ori-proto` is a placeholder. This already caused
-  one production failure (`memoryGb` vs `memoryGB`). See `docs/CODE-REVIEW.md`.
+- ~~**~1,200 lines of duplicated wire types**~~ **RESOLVED.** Every shared wire
+  shape now has exactly one definition, in `ori-proto`; the server and CLI both
+  import it. `ori-cli/src/wire.rs` went 513 -> 211 lines (25 duplicate
+  definitions removed) and `ori-server/src/proto.rs` 993 -> 306. Two whole
+  feature areas -- environments and snapshots -- had defined their shapes inline
+  in the command files rather than in `wire.rs`, and were consolidated too.
+
+  The duplication was hiding four real defects, all of the same kind: a value
+  one side computes and the other cannot see.
+
+  1. `exec --status <pid>` **always rendered an empty state.** The server
+     computed `"running"`/`"exited"`/`"failed"` into a variable named
+     `_state_name` and discarded it, because its `ExecResponse` had no `state`
+     field; the client's copy declared `state` with `#[serde(default)]`, so the
+     miss was invisible. The two responses are now separate types
+     (`ExecResponse`, `ExecStatusResponse`) and the status endpoint returns the
+     state it already knew.
+  2. `ExecStatusResponse.exit_code` was `i64` server-side and `Option<i64>`
+     client-side. The server sent `unwrap_or(0)`, so a lost pid reported
+     **success**. It is `Option` now and a terminal state with no code exits 1.
+  3. The env request shapes carried *different halves* of the serde contract:
+     the client had `skip_serializing_if` (it writes them), the server had
+     `default` (it reads them). Neither copy could round-trip its own output.
+     The shared shapes carry both.
+  4. `CliVersion` in `ori-proto` was a dead third copy, missing
+     `release_base_url` -- the field that tells the CLI where to self-update
+     from. Deleted; the real shape is shared.
+
+  `Ready.commands` is also typed now (`Commands`, not `HashMap<String, String>`
+  read with `.get("ssh")`), so a misspelt key is a compile error instead of a
+  silently absent line.
 - **VMID allocation** should consult the live node's vmid list, not only our
   counter and `/cluster/nextid`.
 - **Self-signed PVE certs** need `ORI_PVE_INSECURE=1` or a CA file.
@@ -165,4 +193,6 @@ of these pre-started and claiming one per `ori new`.
 
 ## Tests
 
-`cargo build --workspace` clean. `cargo test --workspace`: **189 passing, 0 failing.**
+`cargo build --workspace` clean, no warnings. `cargo clippy --workspace
+--all-targets`: 2 pre-existing style warnings, unrelated to any wire type.
+`cargo test --workspace`: **233 passing, 0 failing.**

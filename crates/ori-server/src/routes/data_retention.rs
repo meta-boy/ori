@@ -6,20 +6,12 @@
 
 use axum::extract::{Extension, State};
 use axum::Json;
-use serde::Serialize;
+use ori_proto::DataRetentionStatus;
 
 use crate::auth::ApiKeyAuth;
 use crate::error::ApiResult;
 use crate::state::AppState;
 use crate::util::now_ts;
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DataRetentionStatus {
-    /// Whether delete-on-stop is currently in force. `status` states plainly
-    /// what is true right now — no hedging.
-    pub enabled: bool,
-}
 
 pub async fn status(
     State(state): State<AppState>,

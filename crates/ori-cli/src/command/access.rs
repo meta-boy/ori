@@ -9,7 +9,7 @@ use crate::cli::{DesktopArgs, ExecArgs, HostArgs};
 use crate::context::Ctx;
 use crate::error::{ApiError, CliError};
 use crate::render::print_json;
-use crate::wire::ExecResponse;
+use crate::wire::{ExecResponse, ExecStatusResponse};
 
 pub async fn exec(args: ExecArgs, ctx: &Ctx) -> Result<(), CliError> {
     if args.command.is_empty() && args.status.is_none() {
@@ -25,7 +25,7 @@ pub async fn exec(args: ExecArgs, ctx: &Ctx) -> Result<(), CliError> {
     if let Some(pid) = args.status {
         let res = ctx
             .api
-            .get_json::<ExecResponse>(&format!("{base}/{pid}"))
+            .get_json::<ExecStatusResponse>(&format!("{base}/{pid}"))
             .await?;
         if ctx.json {
             print_json(&res)?;
@@ -33,16 +33,21 @@ pub async fn exec(args: ExecArgs, ctx: &Ctx) -> Result<(), CliError> {
             println!("pid {} state {}", res.pid, res.state);
         }
         if matches!(res.state.as_str(), "exited" | "done" | "failed") {
-            return Err(CliError::RemoteExit(res.exit_code.unwrap_or(1)));
+            // A terminal state with no exit code means the agent lost the pid;
+            // that is a failure to report, not a success.
+            return Err(CliError::RemoteExit(
+                res.exit_code.map(|c| c as i32).unwrap_or(1),
+            ));
         }
         return Ok(());
     }
 
     let req = crate::wire::ExecRequest {
-        command: args.command.clone(),
+        cmd: args.command.clone(),
         cwd: args.cwd.clone(),
-        timeout: args.timeout,
+        timeout_secs: Some(u64::from(args.timeout)),
         detach: args.detach,
+        env: None,
     };
     let res = ctx.api.post_json::<ExecResponse>(&base, &req).await?;
 
@@ -58,23 +63,22 @@ pub async fn exec(args: ExecArgs, ctx: &Ctx) -> Result<(), CliError> {
     if ctx.json {
         print_json(&res)?;
     } else {
-        if let Some(out) = &res.stdout {
-            print!("{out}");
-        }
-        if let Some(err) = &res.stderr {
-            eprint!("{err}");
-        }
+        print!("{}", res.stdout);
+        eprint!("{}", res.stderr);
         io::stdout().flush().ok();
         io::stderr().flush().ok();
     }
 
-    match res.exit_code {
-        Some(code) => Err(CliError::RemoteExit(code)),
-        None => Err(CliError::Api(ApiError {
+    // `completed` is what makes exit_code meaningful: an incomplete run (the
+    // server-side timeout fired) has a zero-valued exit_code that means nothing.
+    if res.completed {
+        Err(CliError::RemoteExit(res.exit_code as i32))
+    } else {
+        Err(CliError::Api(ApiError {
             status: 0,
-            code: "bad_response".into(),
-            message: "exec response missing exitCode".into(),
-        })),
+            code: "incomplete".into(),
+            message: "command did not complete; use --status to poll".into(),
+        }))
     }
 }
 

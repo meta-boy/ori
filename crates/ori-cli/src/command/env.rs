@@ -6,9 +6,13 @@
 //! to `********` in every human and JSON rendering. The server withholds them
 //! entirely; this module just never asks for them back.
 
-use std::io::{self, Write};
+use ori_proto::{
+    AddRepoRequest, CreateEnvRequest, Environment, EnvironmentList, EnvironmentResponse,
+    RenameEnvRequest, SetFileRequest, SetToggleRequest, SetVarRequest, UpgradeReport,
+};
 
-use serde::{Deserialize, Serialize};
+type EnvironmentListResponse = EnvironmentList;
+use std::io::{self, Write};
 
 use crate::cli::EnvCommand;
 use crate::context::Ctx;
@@ -18,128 +22,6 @@ use crate::render::{print_json, table_string};
 // ---------------------------------------------------------------------------
 // Wire DTOs (mirror `routes/environments.rs`; kept local so this card owns them)
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Toggles {
-    #[serde(default = "default_on")]
-    pub inject_vars: bool,
-    #[serde(default = "default_on")]
-    pub inject_files: bool,
-    #[serde(default = "default_on")]
-    pub inject_secrets: bool,
-}
-
-fn default_on() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvVar {
-    pub key: String,
-    pub secret: bool,
-    #[serde(default)]
-    pub value: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvFile {
-    pub path: String,
-    pub secret: bool,
-    #[serde(default)]
-    pub content: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvRepo {
-    pub url: String,
-    #[serde(default)]
-    pub branch: Option<String>,
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Environment {
-    pub name: String,
-    pub is_default: bool,
-    pub version: i64,
-    pub created_at: String,
-    pub updated_at: String,
-    pub vars: Vec<EnvVar>,
-    pub files: Vec<EnvFile>,
-    pub repos: Vec<EnvRepo>,
-    pub toggles: Toggles,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvironmentListResponse {
-    pub environments: Vec<Environment>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvironmentResponse {
-    pub environment: Environment,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpgradeReport {
-    pub environment: String,
-    pub version: i64,
-    pub sandboxes: usize,
-    pub applied: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateEnvRequest {
-    pub name: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenameEnvRequest {
-    pub new_name: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetVarRequest {
-    pub key: String,
-    pub value: String,
-    pub secret: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetFileRequest {
-    pub path: String,
-    pub content: String,
-    pub secret: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AddRepoRequest {
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetToggleRequest {
-    pub toggle: String,
-    pub on: bool,
-}
 
 // ---------------------------------------------------------------------------
 // dispatch

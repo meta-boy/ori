@@ -335,16 +335,22 @@ impl std::str::FromStr for MachineType {
 // NDJSON event stream
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Commands {
+    /// Both fields are `default` on read. The server always sends both, but a
+    /// missing one must not fail the whole line: this rides the *terminal*
+    /// `ready` event, so a parse error there makes a successful create look
+    /// like a failed one.
+    #[serde(default)]
     pub ssh: String,
+    #[serde(default)]
     pub forward: String,
 }
 
 /// One JSON object per line on the create / resume / fork streams.
 /// Serialises to exactly the lines quoted in `docs/SPEC-API.md`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "event",
     rename_all = "camelCase",
@@ -353,7 +359,9 @@ pub struct Commands {
 pub enum StreamEvent {
     Created {
         id: String,
+        #[serde(default)]
         ttl_seconds: Option<i64>,
+        #[serde(default)]
         team: Option<String>,
     },
     State {
@@ -366,24 +374,32 @@ pub enum StreamEvent {
     },
     Ready {
         id: String,
+        #[serde(default)]
         state: String,
+        #[serde(default)]
         ip: Option<String>,
+        #[serde(default)]
         url: Option<String>,
+        #[serde(default)]
         desktop_url: Option<String>,
+        #[serde(default)]
         stop_after: Option<String>,
-        commands: Commands,
+        #[serde(default)]
+        commands: Option<Commands>,
     },
     /// Non-terminal informational line, e.g. a fork that reused an older
     /// stopped-taken snapshot and therefore omits writes made since it. The
     /// CLI renders it as progress; it never ends the stream.
     Notice {
-        id: String,
+        #[serde(default)]
+        id: Option<String>,
         message: String,
     },
     /// Terminal event on the stream. Once an error is known the HTTP status
     /// is long since sent, so errors ride the stream, not the status.
     Error {
-        id: String,
+        #[serde(default)]
+        id: Option<String>,
         code: String,
         message: String,
     },
@@ -403,7 +419,7 @@ impl StreamEvent {
 // ---------------------------------------------------------------------------
 
 /// The sandbox object from `docs/SPEC-API.md`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sandbox {
     pub id: String,
@@ -436,7 +452,7 @@ pub struct Sandbox {
     pub team: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxDetail {
     pub sandbox: Sandbox,
@@ -445,7 +461,7 @@ pub struct SandboxDetail {
 /// `POST /sandboxes/{id}/extend` response. The new deadline is stated at the
 /// top level as well as on the sandbox: a caller must be able to see exactly
 /// what `extend` produced without re-reading `sandbox.stopAfter`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtendResponse {
     pub sandbox: Sandbox,
@@ -453,7 +469,7 @@ pub struct ExtendResponse {
     pub stop_after: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageInfo {
     pub has_more: bool,
@@ -461,7 +477,7 @@ pub struct PageInfo {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxList {
     pub sandboxes: Vec<Sandbox>,
@@ -470,7 +486,7 @@ pub struct SandboxList {
 
 // -- create / resume / fork request bodies ----------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSandboxRequest {
     /// `type` per spec; `ty` is what the current CLI sends; `machineType` is
@@ -494,7 +510,7 @@ pub struct CreateSandboxRequest {
     pub personal: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeSandboxRequest {
     #[serde(rename = "type", alias = "machineType", alias = "ty")]
@@ -506,7 +522,7 @@ pub struct ResumeSandboxRequest {
     pub environment: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForkSandboxRequest {
     #[serde(rename = "type", alias = "machineType", alias = "ty")]
@@ -523,7 +539,7 @@ pub struct ForkSandboxRequest {
     pub no_stop: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StopSandboxRequest {
     /// `ori stop --force` — skip the snapshot, data-lossy.
@@ -531,7 +547,7 @@ pub struct StopSandboxRequest {
     pub force: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtendSandboxRequest {
     pub hours: Option<i64>,
@@ -539,7 +555,7 @@ pub struct ExtendSandboxRequest {
     pub no_auto_stop: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecRequestBody {
     /// `cmd` per spec; `command` is what the CLI sends.
@@ -554,7 +570,29 @@ pub struct ExecRequestBody {
     pub env: Option<HashMap<String, String>>,
 }
 
-#[derive(Debug, Serialize)]
+/// Result of `exec --status <pid>` on a detached process.
+///
+/// Distinct from [`ExecResponse`] on purpose. The two were one struct on the
+/// client side, which is why `state` -- the only reason to call this endpoint --
+/// was declared `#[serde(default)]` and silently rendered empty: the server
+/// computed the value and dropped it on the floor.
+///
+/// `state` is `running | exited | failed | lost`. `lost` means the guest agent
+/// restarted and can no longer speak for the pid, which is not the same as the
+/// process having succeeded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecStatusResponse {
+    pub pid: i64,
+    pub state: String,
+    pub exit_code: Option<i64>,
+    #[serde(default)]
+    pub stdout: String,
+    #[serde(default)]
+    pub stderr: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub pid: i64,
@@ -567,7 +605,7 @@ pub struct ExecResponse {
 
 // -- async deletion operations ----------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Operation {
     pub id: String,
@@ -580,7 +618,7 @@ pub struct Operation {
     pub completed_at: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationDetail {
     pub operation: Operation,
@@ -588,13 +626,13 @@ pub struct OperationDetail {
 
 // -- api keys ----------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateApiKeyRequest {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKey {
     pub id: String,
@@ -606,7 +644,7 @@ pub struct ApiKey {
 }
 
 /// The secret is present exactly once, on creation.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyCreated {
     pub id: String,
@@ -617,7 +655,7 @@ pub struct ApiKeyCreated {
     pub created_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyList {
     pub api_keys: Vec<ApiKey>,
@@ -627,7 +665,7 @@ pub struct ApiKeyList {
 /// whether the rotated key was the one that authenticated the request — when
 /// true, the caller's stored token is now dead and must be replaced with the
 /// returned secret.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyRotated {
     pub api_key: ApiKeyCreated,
@@ -636,7 +674,7 @@ pub struct ApiKeyRotated {
 
 // -- account ----------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     pub identifier: String,
@@ -644,7 +682,7 @@ pub struct Account {
     pub status: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Team {
     pub id: String,
@@ -653,7 +691,7 @@ pub struct Team {
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamList {
     pub teams: Vec<Team>,
@@ -661,7 +699,7 @@ pub struct TeamList {
 
 // -- device-code login -------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginStartRequest {
     pub client_name: Option<String>,
@@ -671,7 +709,7 @@ pub struct LoginStartRequest {
     pub email: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginStartResponse {
     pub id: String,
@@ -680,7 +718,7 @@ pub struct LoginStartResponse {
     pub expires_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginPollResponse {
     /// pending | approved | expired
@@ -692,11 +730,424 @@ pub struct LoginPollResponse {
 
 // -- misc --------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CliVersion {
+pub struct CliVersionResponse {
     pub current: String,
     pub latest: String,
     pub channel: String,
     pub update_available: bool,
+    /// Where the CLI fetches `install.sh`/`latest.json` to self-update.
+    /// `None` when the control plane has no release channel configured.
+    #[serde(default)]
+    pub release_base_url: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// webhooks
+// ---------------------------------------------------------------------------
+
+/// A webhook as listed. The signing secret is never in this shape -- only
+/// `prefix` and `last_four`, enough to identify it in a UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Webhook {
+    pub id: String,
+    pub url: String,
+    pub events: String,
+    pub prefix: String,
+    pub last_four: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookList {
+    pub webhooks: Vec<Webhook>,
+}
+
+/// `POST /webhooks` -- the one and only response carrying `secret` in clear.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookCreated {
+    pub id: String,
+    pub url: String,
+    pub events: String,
+    pub prefix: String,
+    pub last_four: String,
+    pub secret: String,
+    pub created_at: String,
+}
+
+/// `POST /webhooks/{id}/rotate` -- a fresh signing secret, shown once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookRotated {
+    pub webhook: WebhookCreated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWebhookRequest {
+    pub url: String,
+    pub events: Option<String>,
+}
+
+/// `GET /account/data-retention`. States what is true now, without hedging.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRetentionStatus {
+    pub enabled: bool,
+}
+
+// ---------------------------------------------------------------------------
+// snapshots
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub id: String,
+    pub sandbox_id: String,
+    pub name: Option<String>,
+    pub provider_snapshot: String,
+    pub state: String,
+    pub is_incremental: bool,
+    pub parent_id: Option<String>,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    /// Provenance, and the single biggest cost signal on this type: forking
+    /// from a snapshot taken while the container was running is ~20x slower.
+    pub taken_while_stopped: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotList {
+    pub snapshots: Vec<Snapshot>,
+    pub page_info: PageInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotDetail {
+    pub snapshot: Snapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedSnapshot {
+    pub name: String,
+    pub snapshot_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedSnapshotList {
+    pub named_snapshots: Vec<NamedSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSnapshotRequest {
+    pub sandbox_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSnapshotResponse {
+    pub snapshot: Snapshot,
+    pub named: NamedSnapshot,
+    /// Unset in this build; the client renders its own note. The client's copy
+    /// of this struct omitted the field entirely, so a server that started
+    /// sending it would have been silently ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotTreeFile {
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotTree {
+    pub snapshot: Snapshot,
+    pub files: Vec<SnapshotTreeFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotDeleted {
+    pub deleted: bool,
+}
+
+// ---------------------------------------------------------------------------
+// environments
+//
+// Each shape below existed twice, and the two copies carried *different halves*
+// of the serde contract: the client had `skip_serializing_if` (it writes) and
+// the server had `default` (it reads). Unified here with both, which is what
+// either side alone would have needed to round-trip its own output.
+// ---------------------------------------------------------------------------
+
+fn default_on() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Toggles {
+    /// Inject env vars at all. Off means the bundle's vars are withheld.
+    #[serde(default = "default_on")]
+    pub inject_vars: bool,
+    /// Inject files at all. Off means the bundle's files are withheld.
+    #[serde(default = "default_on")]
+    pub inject_files: bool,
+    /// Inject secret vars and secret files. Off withholds secrets from every
+    /// claim -- the same withholding an upgrade applies to removed secrets,
+    /// as a persistent toggle.
+    #[serde(default = "default_on")]
+    pub inject_secrets: bool,
+}
+
+impl Default for Toggles {
+    fn default() -> Self {
+        Self {
+            inject_vars: true,
+            inject_files: true,
+            inject_secrets: true,
+        }
+    }
+}
+
+impl Toggles {
+    /// The accepted `ori env toggle` names, in the order the CLI lists them.
+    pub fn names() -> &'static [&'static str] {
+        &["inject_vars", "inject_files", "inject_secrets"]
+    }
+
+    /// `None` for an unknown name, so the caller can reject it by name rather
+    /// than silently accepting a typo as a no-op.
+    pub fn set(&mut self, name: &str, on: bool) -> Option<()> {
+        match name {
+            "inject_vars" => self.inject_vars = on,
+            "inject_files" => self.inject_files = on,
+            "inject_secrets" => self.inject_secrets = on,
+            _ => return None,
+        }
+        Some(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvVar {
+    pub key: String,
+    pub secret: bool,
+    /// Absent for a secret: the value is write-only once set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvFile {
+    pub path: String,
+    pub secret: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvRepo {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Environment {
+    pub name: String,
+    pub is_default: bool,
+    pub version: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub vars: Vec<EnvVar>,
+    pub files: Vec<EnvFile>,
+    pub repos: Vec<EnvRepo>,
+    pub toggles: Toggles,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentList {
+    pub environments: Vec<Environment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentResponse {
+    pub environment: Environment,
+}
+
+/// Result of `ori env upgrade`: how many live sandboxes picked up the new
+/// version, out of how many were eligible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeReport {
+    pub environment: String,
+    pub version: i64,
+    pub sandboxes: usize,
+    pub applied: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEnvRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameEnvRequest {
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetVarRequest {
+    pub key: String,
+    pub value: String,
+    #[serde(default)]
+    pub secret: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetFileRequest {
+    pub path: String,
+    pub content: String,
+    #[serde(default)]
+    pub secret: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRepoRequest {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetToggleRequest {
+    pub toggle: String,
+    pub on: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `exec` and `exec --status` are different responses. They were one struct
+    /// on the client, which is how `state` -- the only reason to call the status
+    /// endpoint -- ended up `#[serde(default)]` and silently empty while the
+    /// server computed the value and dropped it.
+    #[test]
+    fn exec_status_carries_state_and_optional_exit_code() {
+        let running: ExecStatusResponse =
+            serde_json::from_str(r#"{"pid":4211,"state":"running","exitCode":null}"#).unwrap();
+        assert_eq!(running.state, "running");
+        assert_eq!(
+            running.exit_code, None,
+            "a running process has no exit code"
+        );
+        assert_eq!(running.stdout, "");
+
+        let done: ExecStatusResponse = serde_json::from_str(
+            r#"{"pid":4211,"state":"exited","exitCode":3,"stdout":"out","stderr":"err"}"#,
+        )
+        .unwrap();
+        assert_eq!(done.state, "exited");
+        assert_eq!(done.exit_code, Some(3));
+
+        // And it serialises `exitCode`, not `exit_code`.
+        let v = serde_json::to_value(&done).unwrap();
+        assert!(v.get("exitCode").is_some());
+        assert!(v.get("state").is_some());
+    }
+
+    /// The client sends `command`/`timeout`; the spec names them `cmd` and
+    /// `timeoutSecs`. Both must decode, or `ori exec` 400s.
+    #[test]
+    fn exec_request_accepts_both_client_and_spec_names() {
+        let a: ExecRequestBody =
+            serde_json::from_str(r#"{"command":["ls","-la"],"timeout":30}"#).unwrap();
+        assert_eq!(a.cmd, vec!["ls", "-la"]);
+        assert_eq!(a.timeout_secs, Some(30));
+
+        let b: ExecRequestBody = serde_json::from_str(r#"{"cmd":["ls"],"timeoutSecs":5}"#).unwrap();
+        assert_eq!(b.cmd, vec!["ls"]);
+        assert_eq!(b.timeout_secs, Some(5));
+    }
+
+    /// A partial `commands` object must not fail the line: this rides the
+    /// terminal `ready` event, so a parse error makes a good create look bad.
+    #[test]
+    fn ready_tolerates_a_partial_commands_object() {
+        let e: StreamEvent = serde_json::from_str(
+            r#"{"event":"ready","id":"ori_a1b2c3d4","commands":{"ssh":"ori ssh x"}}"#,
+        )
+        .unwrap();
+        match e {
+            StreamEvent::Ready { commands, .. } => {
+                let c = commands.expect("commands present");
+                assert_eq!(c.ssh, "ori ssh x");
+                assert_eq!(c.forward, "");
+            }
+            _ => panic!("expected ready"),
+        }
+    }
+
+    /// Env request shapes carry both halves of the serde contract: the client
+    /// writes them (`skip_serializing_if`) and the server reads them
+    /// (`default`). Each side previously had only its own half.
+    #[test]
+    fn add_repo_request_round_trips_both_directions() {
+        let r = AddRepoRequest {
+            url: "https://example.invalid/r.git".into(),
+            branch: None,
+            path: None,
+        };
+        let s = serde_json::to_string(&r).unwrap();
+        assert_eq!(s, r#"{"url":"https://example.invalid/r.git"}"#);
+        let back: AddRepoRequest = serde_json::from_str(&s).unwrap();
+        assert!(back.branch.is_none() && back.path.is_none());
+    }
+
+    #[test]
+    fn unknown_toggle_is_rejected_by_name() {
+        let mut t = Toggles::default();
+        assert!(t.inject_vars && t.inject_files && t.inject_secrets);
+        assert!(t.set("inject_secrets", false).is_some());
+        assert!(!t.inject_secrets);
+        assert!(
+            t.set("inject_secret", false).is_none(),
+            "a typo must be rejected, not silently accepted as a no-op"
+        );
+    }
 }

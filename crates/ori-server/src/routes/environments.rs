@@ -9,75 +9,19 @@
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::{Deserialize, Serialize};
+use ori_proto::{
+    AddRepoRequest, CreateEnvRequest, EnvironmentList, EnvironmentResponse, RenameEnvRequest,
+    SetFileRequest, SetToggleRequest, SetVarRequest,
+};
 
 use crate::auth::ApiKeyAuth;
-use crate::env::{self, EnvironmentDto, UpgradeReport};
+use crate::env::{self, UpgradeReport};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
 // DTOs
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvironmentList {
-    pub environments: Vec<EnvironmentDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnvironmentResponse {
-    pub environment: EnvironmentDto,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateEnvRequest {
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenameEnvRequest {
-    pub new_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetVarRequest {
-    pub key: String,
-    pub value: String,
-    #[serde(default)]
-    pub secret: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetFileRequest {
-    pub path: String,
-    pub content: String,
-    #[serde(default)]
-    pub secret: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AddRepoRequest {
-    pub url: String,
-    #[serde(default)]
-    pub branch: Option<String>,
-    #[serde(default)]
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetToggleRequest {
-    pub toggle: String,
-    pub on: bool,
-}
 
 // ---------------------------------------------------------------------------
 // handlers

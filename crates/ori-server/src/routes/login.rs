@@ -3,7 +3,7 @@
 
 use axum::extract::{Path, State};
 use axum::Json;
-use serde::Serialize;
+use ori_proto::CliVersionResponse;
 
 use crate::auth;
 use crate::error::{ApiError, ApiResult};
@@ -185,25 +185,6 @@ pub async fn login_poll(
             "unexpected login state {other}"
         ))),
     }
-}
-
-/// `GET /cli/version` — the self-update channel check. This is the same
-/// contract `latest.json` uses (docs/SPEC-API.md, install.sh): a release base
-/// URL configured on the control plane, whose `latest.json` declares the
-/// newest `version`/`channel` for the channel. The CLI compares against its own
-/// version and, when an update is available, reuses `install.sh` (checksum
-/// verified, refuses downgrades and channel jumps) rather than writing a second
-/// updater.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CliVersionResponse {
-    pub current: String,
-    pub latest: String,
-    pub channel: String,
-    pub update_available: bool,
-    /// Where the CLI should fetch `install.sh`/`latest.json` to self-update.
-    /// `None` when the control plane has no release channel configured.
-    pub release_base_url: Option<String>,
 }
 
 pub async fn cli_version(State(state): State<AppState>) -> ApiResult<Json<CliVersionResponse>> {
