@@ -80,7 +80,7 @@ Copy the shape (never commit it — it is in `.gitignore`):
 ORI_PVE_HOST=https://<host>:8006
 ORI_PVE_SSH="root@<host> -p 2222"        # or without -p if standard ssh
 ORI_PVE_NODE=sandbox
-ORI_PVE_TOKEN_ID='root@pam!bx'           # user@realm!tokenid
+ORI_PVE_TOKEN_ID='root@pam!ori'           # user@realm!tokenid
 ORI_PVE_TOKEN_SECRET=<secret>
 ORI_PVE_STORAGE=local-lvm                # must be lvmthin or zfspool
 ORI_PVE_BRIDGE=vmbr0
