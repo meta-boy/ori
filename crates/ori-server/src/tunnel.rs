@@ -29,6 +29,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -47,11 +49,23 @@ const OUTBOUND_BUFFER: usize = 64;
 /// How long a tunnel request waits before falling back to the provider.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(620);
 
+/// An in-flight request, plus the output streamed for it so far.
+///
+/// `exec` is not one-reply-per-request: the agent streams stdout/stderr as
+/// `stream` frames and only then sends the terminal `execResult`. Resolving on
+/// the first frame carrying the id returns an output chunk and silently drops
+/// the result, so chunks accumulate here until a terminal frame arrives.
+struct Pending {
+    tx: oneshot::Sender<Value>,
+    stdout: String,
+    stderr: String,
+}
+
 /// A live agent connection.
 #[derive(Clone)]
 struct AgentConn {
     tx: mpsc::Sender<Value>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    pending: Arc<Mutex<HashMap<String, Pending>>>,
 }
 
 /// Sandbox id -> live tunnel. Cloned into `AppState`.
@@ -81,7 +95,14 @@ impl AgentRegistry {
     async fn request(&self, sandbox_id: &str, id: &str, frame: Value) -> Option<Value> {
         let conn = { self.inner.read().await.get(sandbox_id).cloned() }?;
         let (tx, rx) = oneshot::channel();
-        conn.pending.lock().await.insert(id.to_string(), tx);
+        conn.pending.lock().await.insert(
+            id.to_string(),
+            Pending {
+                tx,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        );
 
         if conn.tx.send(frame).await.is_err() {
             conn.pending.lock().await.remove(id);
@@ -209,7 +230,7 @@ pub async fn agent_tunnel(
 async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Value>(OUTBOUND_BUFFER);
-    let pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>> = Default::default();
+    let pending: Arc<Mutex<HashMap<String, Pending>>> = Default::default();
 
     state
         .agents
@@ -267,10 +288,51 @@ async fn serve(state: AppState, sandbox_id: String, socket: WebSocket) {
                 // silently.
                 match v.get("id").and_then(|x| x.as_str()) {
                     Some(id) => {
-                        if let Some(waiter) = pending.lock().await.remove(id) {
-                            let _ = waiter.send(v);
-                        } else {
-                            tracing::debug!(sandbox = %sandbox_id, kind = %kind, id = %id, "no waiter for frame");
+                        let mut guard = pending.lock().await;
+                        if kind == "stream" {
+                            // An output chunk: accumulate and keep waiting.
+                            if let Some(p) = guard.get_mut(id) {
+                                let b64 = v.get("data_b64").and_then(|x| x.as_str()).unwrap_or("");
+                                if let Ok(bytes) =
+                                    base64::engine::general_purpose::STANDARD.decode(b64)
+                                {
+                                    let text = String::from_utf8_lossy(&bytes);
+                                    match v.get("fd").and_then(|x| x.as_u64()).unwrap_or(1) {
+                                        2 => p.stderr.push_str(&text),
+                                        _ => p.stdout.push_str(&text),
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        match guard.remove(id) {
+                            Some(p) => {
+                                let mut frame = v;
+                                // `stdout`/`stderr` are omitted from the terminal
+                                // frame when empty, so fold in what we streamed.
+                                if frame
+                                    .get("stdout")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("")
+                                    .is_empty()
+                                    && !p.stdout.is_empty()
+                                {
+                                    frame["stdout"] = Value::String(p.stdout);
+                                }
+                                if frame
+                                    .get("stderr")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("")
+                                    .is_empty()
+                                    && !p.stderr.is_empty()
+                                {
+                                    frame["stderr"] = Value::String(p.stderr);
+                                }
+                                let _ = p.tx.send(frame);
+                            }
+                            None => {
+                                tracing::debug!(sandbox = %sandbox_id, kind = %kind, id = %id, "no waiter for frame");
+                            }
                         }
                     }
                     None => {

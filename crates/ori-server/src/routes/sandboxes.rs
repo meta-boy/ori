@@ -1003,6 +1003,31 @@ pub async fn exec_sandbox(
 
     let result = match tunnelled {
         Some(frame) => {
+            // The agent answers a rejected exec with an `error` frame carrying a
+            // code and a message. Mapping that through `unwrap_or` defaults
+            // would fabricate a success-shaped reply (exit -1, empty stdout)
+            // and throw away the only useful diagnostic, so surface it.
+            if frame.get("type").and_then(|v| v.as_str()) == Some("error") {
+                let code = frame
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent_error");
+                let message = frame
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("agent rejected the request");
+                return Err(ApiError::invalid_request(format!(
+                    "agent: {code}: {message}"
+                )));
+            }
+            // Anything that is not an execResult is a protocol mismatch, not a
+            // command that exited -1. Say so rather than inventing a result.
+            let kind = frame.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if kind != "execResult" {
+                return Err(ApiError::internal(format!(
+                    "agent returned unexpected frame {kind:?} for exec"
+                )));
+            }
             let g = |k: &str| frame.get(k).cloned().unwrap_or(serde_json::Value::Null);
             ExecResult {
                 pid: g("pid").as_i64().unwrap_or(0),

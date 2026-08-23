@@ -17,6 +17,7 @@ async-trait = { workspace = true }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 argon2 = { version = "0.5", features = ["std"] }
 getrandom = "0.3"
+base64 = "0.22"
 hex = "0.4"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
