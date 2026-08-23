@@ -26,15 +26,23 @@ user cannot query that id. Wire `GET /operations/{id}` to the CLI and render
 snapshot with dependent incrementals cannot be deleted, and the operation must
 report *why* rather than sitting in `pending` forever.
 
-## 3. `ori limits` — CLI-side only
+## 3. `ori limits` — **remove it**, and replace it with something real
 
-`GET /limits` already works and returns real quota numbers. The CLI just does
-not render it. Small, but it is currently a stub over a working endpoint.
+Decision: drop the command and the plan/quota concept entirely. Billing-style
+per-account quotas are meaningless for a self-hosted tool, and `GET /limits`
+currently reports numbers that may not be enforced at all — a quota nobody
+enforces reads as a guarantee, which is worse than having none.
 
-**While you are there:** check whether those limits are *enforced*. Create past
-`maxRunningSandboxes` and see what happens. If nothing does, say so in
-`docs/DIVERGENCES.md` — reporting a quota nobody enforces is worse than having
-no quota, because it reads as a guarantee.
+Delete the `limits` command, the endpoint, and the plan fields it reports.
+
+**Replace it with a host capacity guard**, which is the need underneath it. This
+is not hypothetical: during this project a leaked-container bug put 13 sandboxes
+on the host and filled it. Refuse `new` when the host cannot take another
+sandbox — thin-pool headroom and free memory, checked against the configured
+machine type — and say which resource is short. Grounding: the preflight script
+already computes pool footprint and headroom (`scripts/preflight.sh` emits
+`ORI_POOL_HEADROOM_GB`); reuse that arithmetic rather than inventing a second
+notion of "full".
 
 ## 4. `ori api-key` — list / rotate / revoke
 
