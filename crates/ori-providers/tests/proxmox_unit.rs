@@ -442,3 +442,92 @@ async fn sends_pve_api_token_header() {
         Some("PVEAPIToken=user@pam!token=secret")
     );
 }
+
+/// Destroying a container that is already gone must be a no-op.
+///
+/// PVE does not say "404" for this — it returns **500** with
+/// `Configuration file 'nodes/<node>/lxc/<vmid>.conf' does not exist`. The
+/// provider used to guard on `status == 404`, which this response never
+/// matches, so a retried or reconcile-driven delete surfaced a hard error.
+/// Caught by the real conformance suite, which is `#[ignore]`d; pinned here so
+/// it fails without hardware.
+#[tokio::test]
+async fn destroy_is_idempotent_when_the_container_is_already_gone() {
+    let server = MockServer::start().await;
+    mount_preflight(&server, "lvmthin").await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/api2/json/nodes/sandbox/lxc/9001"))
+        .respond_with(ResponseTemplate::new(500).set_body_string(
+            "{\"message\":\"Configuration file 'nodes/sandbox/lxc/9001.conf' \
+             does not exist\\n\",\"data\":null}",
+        ))
+        .mount(&server)
+        .await;
+
+    let cfg = config(&server.uri());
+    let provider =
+        ori_providers::proxmox::ProxmoxProvider::new_with_client(cfg, reqwest::Client::new())
+            .await
+            .expect("preflight should pass");
+
+    let h = InstanceHandle {
+        provider: "proxmox".to_string(),
+        id: "sandbox/9001".to_string(),
+    };
+    provider
+        .destroy(&h)
+        .await
+        .expect("destroying an absent container is a no-op, not an error");
+}
+
+/// Deleting a snapshot that is already gone must be a no-op.
+///
+/// The harder shape: the *request* succeeds and hands back a UPID, and the
+/// absence only surfaces when the **task** fails with
+/// `snapshot '<name>' does not exist`. A guard on the request error can never
+/// fire for this, which is why the old one didn't.
+#[tokio::test]
+async fn snapshot_delete_is_idempotent_when_the_snapshot_is_already_gone() {
+    let server = MockServer::start().await;
+    mount_preflight(&server, "lvmthin").await;
+
+    let upid = "UPID:sandbox:JJJ:KKK:LLL:vzdelsnapshot:9001:root@pam:";
+
+    Mock::given(method("DELETE"))
+        .and(path("/api2/json/nodes/sandbox/lxc/9001/snapshot/gone"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": upid
+        })))
+        .mount(&server)
+        .await;
+
+    // The task completes, and reports failure in `exitstatus`.
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/api2/json/nodes/sandbox/tasks/.+/status$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "status": "stopped",
+                "exitstatus": "snapshot 'gone' does not exist",
+                "upid": upid,
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = config(&server.uri());
+    let provider =
+        ori_providers::proxmox::ProxmoxProvider::new_with_client(cfg, reqwest::Client::new())
+            .await
+            .expect("preflight should pass");
+
+    let s = SnapshotRef {
+        provider: "proxmox".to_string(),
+        id: "sandbox/9001/gone".to_string(),
+        name: "gone".to_string(),
+    };
+    provider
+        .snapshot_delete(&s)
+        .await
+        .expect("deleting an absent snapshot is a no-op, not an error");
+}

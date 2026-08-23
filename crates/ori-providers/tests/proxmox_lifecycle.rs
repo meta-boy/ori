@@ -142,6 +142,22 @@ async fn real_lifecycle_stays_within_benchmark_budgets() {
         created.push(src.clone());
         assert_budget("create", t.elapsed(), Duration::from_secs(9))?;
 
+        // Power the source off *before* snapshotting. `create` starts the
+        // container internally, so snapshotting here without this captures a
+        // **running** container -- and a running-taken snapshot is permanently
+        // ~20x more expensive to clone from (docs/BENCHMARKS.md §Root cause).
+        // This test used to skip the stop and then assert the stopped-taken
+        // budget, so it exercised the slow path while checking the fast path's
+        // number: clone_from came in at 44.7 s against a 6 s budget.
+        //
+        // `Force` because it only needs the power-off; the snapshot below is
+        // the one under test. This also matches what the product does -- the
+        // fast path clones from a snapshot taken while stopped.
+        provider
+            .stop(&src, StopMode::Force)
+            .await
+            .map_err(|e| format!("stop source before snapshot: {e}"))?;
+
         // snapshot — measured 1.15 s.
         let t = Instant::now();
         let snap = provider

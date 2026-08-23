@@ -505,6 +505,31 @@ impl ProxmoxProvider {
     }
 }
 
+/// Does this error mean "the thing you asked me to remove is already gone"?
+///
+/// Deleting something absent must be a no-op -- the conformance suite requires
+/// it, and a reconcile loop or a retried delete depends on it. PVE does not
+/// signal absence the way the old `status == 404` guard assumed:
+///
+/// - destroying a missing container is **500** with
+///   `Configuration file 'nodes/<node>/lxc/<vmid>.conf' does not exist`
+/// - deleting a missing snapshot **succeeds at the request** and returns a UPID,
+///   then fails the *task* with `snapshot '<name>' does not exist`, so a guard
+///   on the request error alone can never fire
+///
+/// Both are matched on the message, which is the only place PVE puts the fact.
+fn is_already_absent(e: &PveError) -> bool {
+    let says_absent = |s: &str| {
+        let s = s.to_ascii_lowercase();
+        s.contains("does not exist") || s.contains("no such")
+    };
+    match e {
+        PveError::Http { status, body, .. } => status.as_u16() == 404 || says_absent(body),
+        PveError::TaskFailed { reason, .. } => says_absent(reason),
+        _ => false,
+    }
+}
+
 #[async_trait]
 impl Provider for ProxmoxProvider {
     fn name(&self) -> &'static str {
@@ -623,12 +648,12 @@ impl Provider for ProxmoxProvider {
     async fn destroy(&self, h: &InstanceHandle) -> Result<(), Error> {
         let (_, vmid) = parse_handle(h).map_err(Self::map_err)?;
         match self.client.destroy_lxc(vmid).await {
-            Ok(upid) => self
-                .client
-                .wait_task(&upid, self.task_timeout())
-                .await
-                .map_err(Self::map_err),
-            Err(PveError::Http { status, .. }) if status.as_u16() == 404 => Ok(()),
+            Ok(upid) => match self.client.wait_task(&upid, self.task_timeout()).await {
+                Ok(()) => Ok(()),
+                Err(e) if is_already_absent(&e) => Ok(()),
+                Err(e) => Err(Self::map_err(e)),
+            },
+            Err(e) if is_already_absent(&e) => Ok(()),
             Err(e) => Err(Self::map_err(e)),
         }
     }
@@ -678,12 +703,14 @@ impl Provider for ProxmoxProvider {
     async fn snapshot_delete(&self, s: &SnapshotRef) -> Result<(), Error> {
         let (_, vmid, name) = parse_snapshot_ref(s).map_err(Self::map_err)?;
         match self.client.snapshot_delete(vmid, &name).await {
-            Ok(upid) => self
-                .client
-                .wait_task(&upid, self.task_timeout())
-                .await
-                .map_err(Self::map_err),
-            Err(PveError::Http { status, .. }) if status.as_u16() == 404 => Ok(()),
+            // The absence shows up here, in the task result, not in the
+            // request -- which is why the old request-only guard never fired.
+            Ok(upid) => match self.client.wait_task(&upid, self.task_timeout()).await {
+                Ok(()) => Ok(()),
+                Err(e) if is_already_absent(&e) => Ok(()),
+                Err(e) => Err(Self::map_err(e)),
+            },
+            Err(e) if is_already_absent(&e) => Ok(()),
             Err(e) => Err(Self::map_err(e)),
         }
     }
