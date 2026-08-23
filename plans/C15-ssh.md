@@ -60,3 +60,27 @@ Why this shape rather than a pty in the guest agent:
 - Record in `docs/STATUS.md` which of these now work, replacing their stub rows.
 
 A mock-tunnel unit test does not satisfy this card.
+
+## Verified facts about the golden image (do not re-derive)
+
+Measured on a fresh linked clone of golden 9501 on the project's host:
+
+- `sshd` **is** running and bound **loopback-only**: `127.0.0.1:22` and `::1:22`.
+  Process is `sshd: /usr/sbin/sshd [listener]`. Confirmed with `nc -z`.
+- There is an unprivileged `work` user (uid 1000, home `/home/work`,
+  shell `/bin/sh`). Authorize keys for that user, not root — `sshd_config` ships
+  the distro default `PermitRootLogin prohibit-password`.
+- `rc-status` shows `sshd`, `docker`, `crond`, `networking` all started at boot,
+  so a pooled clone is ssh-ready without provisioning.
+
+**Probe tooling warning.** This container is busybox-based:
+
+- `ss` is **not installed**; `netstat` exists but does **not** support `-p`, so
+  `netstat -tlnp` fails outright.
+- `/dev/tcp/...` does **not** work — busybox `sh` has no such feature, so a
+  `(echo > /dev/tcp/host/port)` test reports failure unconditionally.
+
+Both of those produced a confident false negative ("no sshd") during
+investigation. Use `nc -z -w2 127.0.0.1 22` or plain `netstat -tln`, and prefer
+a positive test over a fallback chain that reports absence when the tool is
+missing.
