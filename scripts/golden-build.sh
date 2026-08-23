@@ -380,11 +380,24 @@ echo "== work user"
 if [ "$ORI_TIER" = "ubuntu" ]; then
   id work >/dev/null 2>&1 || useradd -m -s /bin/bash -U work
   usermod -aG docker work
-  passwd -l work >/dev/null 2>&1 || true
 else
   id work >/dev/null 2>&1 || adduser -D -s /bin/sh work
   addgroup work docker >/dev/null 2>&1 || true
 fi
+
+# No password login, but the account must NOT be locked.
+#
+# `passwd -l` (and busybox `adduser -D`, which is the alpine default) put `!`
+# in the shadow field, which marks the account *locked* -- and sshd refuses
+# public-key auth for a locked account. That produced
+# "Permission denied (publickey)" against a correct authorized_keys file, with
+# nothing in the sshd config to explain it.
+#
+# `*` is the right value: no password can ever match, so password login is
+# impossible, but the account is not locked and key auth works. sed rather than
+# usermod/passwd because busybox has neither flag consistently.
+sed -i 's/^work:[^:]*:/work:*:/' /etc/shadow
+echo "   work shadow field: $(grep '^work:' /etc/shadow | cut -d: -f2)"
 
 echo "== desktop / VNC (Xvfb -> x11vnc -> websockify -> noVNC, loopback only)"
 if [ "$ORI_DESKTOP" = "1" ]; then

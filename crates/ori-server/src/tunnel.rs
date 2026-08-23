@@ -854,7 +854,7 @@ pub async fn authorize_ssh_key(
          touch \"$h/.ssh/authorized_keys\"; chmod 600 \"$h/.ssh/authorized_keys\"; \
          grep -qxF \"$key\" \"$h/.ssh/authorized_keys\" \
            || printf '%s\\n' \"$key\" >> \"$h/.ssh/authorized_keys\"; \
-         chown -R \"$u\" \"$h/.ssh\" 2>/dev/null || true; echo authorized"
+         chown -R \"$u:$u\" \"$h/.ssh\" 2>/dev/null || chown -R \"$u\" \"$h/.ssh\" 2>/dev/null || true; echo authorized"
         .to_string();
 
     let frame = state
