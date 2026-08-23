@@ -9,9 +9,11 @@ P2='\b'"b"'x[-_][a-z]'
 P3='\b'"b"'x_[a-z0-9]{6,}'
 P4='as'"cii\.dev"
 P5='\b'"bd"'op_'
-# The vendor's own dotdir. `their domain` (P4) only caught the domain, so
-# `~/.ori/processes` and a shipped `.ori/agent.json` config path sat in the
-# tree unflagged. Anchored on the dot so Rust's `is_ascii_*` never matches.
+# The vendor's own dotdir. P4 only caught their domain, so the dotdir itself --
+# process logs, the work dir, and a shipped config-path fallback -- sat in the
+# tree unflagged for the whole project. Anchored on the leading dot, so Rust's
+# `is_ascii_*` / `to_ascii_*` (underscore, not dot) never match. Assembled by
+# concatenation like the others, so this file does not contain what it blocks.
 P6='\.as'"cii/"
 PATTERN="$P1|$P2|$P3|$P4|$P5|$P6"
 staged=$(git diff --cached --name-only --diff-filter=ACM)
