@@ -353,6 +353,17 @@ impl AgentRegistry {
         })
     }
 
+    /// Ask the agent about a detached process: `running | exited | lost`.
+    ///
+    /// `lost` means the agent restarted and can no longer speak for the pid -
+    /// which is not the same as the process having succeeded, so callers must
+    /// treat it as an unknown outcome rather than a clean exit.
+    pub async fn exec_status(&self, sandbox_id: &str, pid: i64) -> Option<Value> {
+        let id = request_id();
+        let frame = json!({"type": "execStatus", "id": id, "pid": pid});
+        self.request(sandbox_id, &id, frame).await
+    }
+
     async fn insert(&self, sandbox_id: &str, conn: AgentConn) {
         // A reconnect replaces the previous entry; the old task is already
         // finished or about to be, and its pending requests will time out

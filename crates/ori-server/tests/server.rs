@@ -1643,25 +1643,60 @@ async fn device_login_full_flow() {
 }
 
 #[tokio::test]
-async fn prompt_interrupt_events_return_not_implemented() {
+async fn prompt_requires_a_known_provider_and_an_agent_tunnel() {
     let t = test_app().await;
     let token = bootstrap_key(&t.app).await;
     let (id, _) = create_sandbox(&t.app, &token, json!({})).await;
-    // prompt/interrupt are POST; the events stream is a GET
+
+    // An unknown provider is rejected before anything is spawned.
     let (status, v) = call_json(
         &t.app,
         req(
             Method::POST,
             &format!("/api/v1/sandboxes/{id}/prompt"),
             Some(&token),
-            Some(json!({})),
+            Some(json!({"provider": "not-a-provider", "message": "hi"})),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(v["error"]["message"], "not implemented in this build");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
 
+    // An empty message is rejected too.
+    let (status, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/prompt"),
+            Some(&token),
+            Some(json!({"provider": "claude", "message": "   "})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A valid request with no live agent tunnel reports that plainly rather
+    // than pretending a run started. The MockProvider has no tunnel.
     let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/prompt"),
+            Some(&token),
+            Some(json!({"provider": "claude", "message": "hello"})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no agent tunnel"),
+        "should name the missing tunnel: {v}"
+    );
+
+    // `interrupt` with nothing running is a 404, not a silent success.
+    let (status, _) = call_json(
         &t.app,
         req(
             Method::POST,
@@ -1671,10 +1706,11 @@ async fn prompt_interrupt_events_return_not_implemented() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(v["error"]["message"], "not implemented in this build");
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, v) = call_json(
+    // `events` on a sandbox that has never run an agent is an empty stream,
+    // not an error.
+    let (status, body) = call(
         &t.app,
         req(
             Method::GET,
@@ -1684,8 +1720,8 @@ async fn prompt_interrupt_events_return_not_implemented() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(v["error"]["message"], "not implemented in this build");
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.trim().is_empty(), "expected no events, got: {body}");
 }
 
 // ---------------------------------------------------------------------------

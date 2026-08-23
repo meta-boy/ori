@@ -201,27 +201,53 @@ fn agent_and_roles_are_listed() {
 }
 
 #[test]
-fn unimplemented_commands_fail_cleanly() {
-    // Only the commands genuinely still stubbed. This list has gone stale three
-    // times as features landed (`host`, `desktop`, then `ssh`/`scp`/`forward`),
-    // each time failing because something started working - so keep it to the
-    // deliberately-unbuilt ones and let the exit-code mapping be unit-tested
-    // in `error.rs` rather than re-derived from a command list here.
-    // Each needs its required args, or clap errors before reaching the stub.
-    for args in [
+fn no_command_reports_unimplemented() {
+    // Inverted from the old stub-list test, which went stale four times as
+    // features landed. Now that every command in the surface is implemented,
+    // the useful invariant is the absence of stubs: if any command starts
+    // answering "not implemented" again, that is a regression.
+    let commands = [
+        vec!["new"],
+        vec!["list"],
+        vec!["info", "ori_x"],
+        vec!["stop", "ori_x"],
+        vec!["resume", "ori_x"],
+        vec!["fork", "ori_x"],
+        vec!["extend", "ori_x", "--hours", "1"],
+        vec!["delete", "ori_x", "--yes"],
+        vec!["operation", "zz"],
+        vec!["exec", "ori_x", "true"],
+        // `ssh`, `scp` and `forward` are deliberately absent: they exec the
+        // system ssh/scp or bind a listener and loop, so spawning them here
+        // hangs the suite rather than testing anything. Their implementations
+        // are covered by the real-host verification instead.
+        vec!["host", "ori_x", "3000"],
+        vec!["desktop", "ori_x"],
+        vec!["snapshots"],
+        vec!["env", "list"],
+        vec!["api-key", "list"],
+        vec!["webhook", "list"],
+        vec!["team", "list"],
+        vec!["data-retention", "status"],
+        vec!["dashboard"],
+        vec!["self-update"],
         vec!["prompt", "ori_x", "--provider", "claude", "hi"],
         vec!["interrupt", "ori_x"],
+        // `events` without --follow returns after one poll, so it is safe.
         vec!["events", "ori_x"],
-    ] {
+    ];
+    for args in commands {
         let out = Command::new(env!("CARGO_BIN_EXE_ori"))
+            // Point at a closed port: every command should fail on transport,
+            // never on being unimplemented.
+            .args(["--api-url", "http://127.0.0.1:9"])
             .args(&args)
             .output()
             .unwrap();
-        assert_eq!(out.status.code(), Some(1), "expected exit 1 for {args:?}");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("not implemented"),
-            "stub must say 'not implemented', got: {stderr}"
+            !stderr.contains("not implemented"),
+            "{args:?} still reports unimplemented: {stderr}"
         );
     }
 }

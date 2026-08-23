@@ -556,6 +556,17 @@ pub enum Shell {
 #[derive(Debug, Args)]
 #[command(trailing_var_arg = true)]
 pub struct PromptArgs {
+    /// Sandbox id, or current/self inside a sandbox
+    pub id: String,
+    /// Agent provider: claude or codex
+    #[arg(long, required = true, value_name = "NAME")]
+    pub provider: String,
+    /// Provider model id
+    #[arg(long, value_name = "MODEL")]
+    pub model: Option<String>,
+    /// Reasoning/thinking level
+    #[arg(long, value_name = "LEVEL")]
+    pub reasoning_effort: Option<String>,
     /// Message to send the agent
     pub message: Vec<String>,
 }
@@ -573,6 +584,9 @@ pub struct EventsArgs {
     /// Seconds to stream for
     #[arg(long, value_name = "SECS")]
     pub timeout: Option<u32>,
+    /// Keep polling for new events until interrupted
+    #[arg(short = 'f', long)]
+    pub follow: bool,
 }
 
 // ---------------------------------------------------------------------------

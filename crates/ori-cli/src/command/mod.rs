@@ -3,6 +3,7 @@
 pub mod access;
 pub mod account;
 pub mod agent;
+pub mod ai;
 pub mod completions;
 pub mod env;
 pub mod lifecycle;
@@ -51,9 +52,9 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::DataRetention(sub) => account::data_retention(sub, &ctx).await,
         Command::Dashboard(a) => account::dashboard(a, &ctx).await,
         Command::SelfUpdate(a) => account::self_update(a, &ctx).await,
-        Command::Prompt(_) => Err(stub::unimplemented("prompt")),
-        Command::Interrupt(_) => Err(stub::unimplemented("interrupt")),
-        Command::Events(_) => Err(stub::unimplemented("events")),
+        Command::Prompt(a) => ai::prompt(a, &ctx).await,
+        Command::Interrupt(a) => ai::interrupt(a, &ctx).await,
+        Command::Events(a) => ai::events(a, &ctx).await,
     }
 }
 
