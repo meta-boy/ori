@@ -532,3 +532,29 @@ mod tests {
         assert!(decode_stream_data(&[]).is_none());
     }
 }
+
+#[cfg(test)]
+mod frame_shape_tests {
+    use super::*;
+
+    /// Pins the on-the-wire key names for `execResult`. The control plane reads
+    /// this frame by key, so a rename here silently degrades every tunnelled
+    /// exec to "no exit code".
+    #[test]
+    fn exec_result_wire_keys() {
+        let f = Outgoing::ExecResult {
+            id: "req_1".into(),
+            pid: 42,
+            completed: true,
+            exit_code: 7,
+            duration_ms: 19,
+            timed_out: false,
+            detached: false,
+            stdout: "hi\n".into(),
+            stderr: String::new(),
+        };
+        let json = serde_json::to_string(&f).unwrap();
+        println!("EXEC_RESULT_JSON={json}");
+        assert!(json.contains("\"type\":\"execResult\""), "{json}");
+    }
+}

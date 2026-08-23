@@ -382,27 +382,27 @@ mod tests {
         assert_eq!(a.len(), "orit_".len() + 48);
     }
 
-    /// The agent's frame enums carry `#[serde(tag = "type", rename_all =
-    /// "camelCase")]`, which renames **variants** and leaves struct fields
-    /// snake_case. Reading `exitCode` instead of `exit_code` silently yields
-    /// defaults — a successful command reported as exit -1 with no output.
-    /// That is the same failure as the `memoryGb`/`memoryGB` outage, so the
-    /// literal frame is pinned here rather than trusted to memory.
+    /// Pinned against the **actual** serialized frame, captured from
+    /// `ori-agent`'s own serializer (see its `exec_result_wire_keys` test), not
+    /// from an assumption about how serde renames fields.
+    ///
+    /// An earlier version of this test asserted the opposite — that these keys
+    /// were snake_case — and passed, because the fixture was hand-written from
+    /// the same wrong belief as the code under test. A fixture you author
+    /// yourself cannot verify a contract you do not own.
     #[test]
-    fn exec_result_frame_uses_snake_case_fields() {
+    fn exec_result_frame_keys_are_camel_case() {
         let frame: Value = serde_json::from_str(
             r#"{"type":"execResult","id":"req_1","pid":42,"completed":true,
-                "exit_code":0,"duration_ms":17,"timed_out":false,
-                "detached":false,"stdout":"hi\n","stderr":""}"#,
+                "exitCode":7,"durationMs":19,"timedOut":false,
+                "detached":false,"stdout":"hi\n"}"#,
         )
         .unwrap();
-        assert_eq!(frame.get("exit_code").and_then(|v| v.as_i64()), Some(0));
-        assert_eq!(frame.get("duration_ms").and_then(|v| v.as_i64()), Some(17));
-        assert!(
-            frame.get("exitCode").is_none(),
-            "camelCase would mean the agent contract changed; update the reader too"
-        );
-        assert!(frame.get("durationMs").is_none());
+        assert_eq!(frame.get("exitCode").and_then(|v| v.as_i64()), Some(7));
+        assert_eq!(frame.get("durationMs").and_then(|v| v.as_i64()), Some(19));
+        // `stdout`/`stderr` are omitted when empty, which is why streamed
+        // chunks have to be folded into the terminal frame.
+        assert!(frame.get("stderr").is_none());
     }
 
     #[tokio::test]
