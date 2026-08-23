@@ -1,14 +1,16 @@
-//! Account commands: login, logout, status.
+//! Account commands: login, logout, status, api-key.
 
 use std::time::Duration;
 
-use crate::cli::{LoginArgs, LogoutArgs, StatusArgs};
+use serde_json::json;
+
+use crate::cli::{ApiKeyCommand, LoginArgs, LogoutArgs, StatusArgs};
 use crate::context::Ctx;
 use crate::error::{ApiError, CliError};
-use crate::render::print_json;
+use crate::render::{print_json, table_string};
 use crate::wire::{
-    AccountStatus, ApiStatus, ConfigStatus, LoginPollResponse, LoginStartRequest,
-    LoginStartResponse, MeResponse, StatusOutput,
+    AccountStatus, ApiKeyCreated, ApiKeyListResponse, ApiKeyRotated, ApiStatus, ConfigStatus,
+    LoginPollResponse, LoginStartRequest, LoginStartResponse, MeResponse, StatusOutput,
 };
 
 pub async fn login(args: LoginArgs, ctx: &mut Ctx) -> Result<(), CliError> {
@@ -103,7 +105,6 @@ pub async fn status(_args: StatusArgs, ctx: &Ctx) -> Result<(), CliError> {
             account = Some(AccountStatus {
                 identifier: me.identifier,
                 login_state: me.login_state,
-                plan: me.plan,
                 status: me.status,
             });
             api_status.healthy = true;
@@ -144,10 +145,7 @@ pub async fn status(_args: StatusArgs, ctx: &Ctx) -> Result<(), CliError> {
     }
 
     match &account {
-        Some(a) => println!(
-            "account:   {}  plan {}  ({})",
-            a.identifier, a.plan, a.status
-        ),
+        Some(a) => println!("account:   {}  ({})", a.identifier, a.status),
         None => println!("account:   not logged in"),
     }
     println!("api:       {}  {}", api_status.url, api_status.status);
@@ -163,4 +161,129 @@ fn store_token(ctx: &mut Ctx, token: String) -> Result<(), CliError> {
     ctx.config.api_url = Some(ctx.api_url_raw.clone());
     ctx.api.token = Some(token);
     ctx.save_config()
+}
+
+// ---------------------------------------------------------------------------
+// api-key
+// ---------------------------------------------------------------------------
+
+pub async fn api_key(cmd: ApiKeyCommand, ctx: &mut Ctx) -> Result<(), CliError> {
+    match cmd {
+        ApiKeyCommand::Create => api_key_create(ctx).await,
+        ApiKeyCommand::List => api_key_list(ctx).await,
+        ApiKeyCommand::Rotate { id } => api_key_rotate(ctx, id).await,
+        ApiKeyCommand::Revoke { id } => api_key_revoke(ctx, id).await,
+    }
+}
+
+async fn api_key_create(ctx: &Ctx) -> Result<(), CliError> {
+    let created = ctx
+        .api
+        .post_json::<ApiKeyCreated>("/api-keys", &json!({}))
+        .await?;
+    if ctx.json {
+        print_json(&created)?;
+    } else {
+        println!("created {}", created.id);
+        println!("  key:     {}...{}", created.prefix, created.last_four);
+        println!("  secret:  {}", created.secret);
+        println!("  (the secret is shown once; store it now)");
+    }
+    Ok(())
+}
+
+async fn api_key_list(ctx: &Ctx) -> Result<(), CliError> {
+    let res = ctx.api.get_json::<ApiKeyListResponse>("/api-keys").await?;
+    if ctx.json {
+        print_json(&res)?;
+        return Ok(());
+    }
+    let header = ["ID", "NAME", "KEY", "CREATED", "STATE"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    let rows: Vec<Vec<String>> = res
+        .api_keys
+        .iter()
+        .map(|k| {
+            vec![
+                k.id.clone(),
+                k.name.clone().unwrap_or_default(),
+                format!("{}...{}", k.prefix, k.last_four),
+                k.created_at.clone(),
+                if k.revoked_at.is_some() {
+                    "revoked".to_string()
+                } else {
+                    "active".to_string()
+                },
+            ]
+        })
+        .collect();
+    print!("{}", table_string(&header, &rows));
+    Ok(())
+}
+
+async fn api_key_rotate(ctx: &mut Ctx, id: Option<String>) -> Result<(), CliError> {
+    let id = resolve_key_id(ctx, id).await?;
+    let res = ctx
+        .api
+        .post_json::<ApiKeyRotated>(&format!("/api-keys/{id}/rotate"), &json!({}))
+        .await?;
+    let created = &res.api_key;
+    if ctx.json {
+        print_json(&res)?;
+    } else {
+        println!("rotated {id}; new key created");
+        println!("  id:      {}", created.id);
+        println!("  secret:  {}", created.secret);
+        println!("  (the secret is shown once; store it now)");
+    }
+    // If the rotated key was the one we are authenticated as, our stored token
+    // is now revoked — replace it with the new secret so the CLI stays usable.
+    if res.current {
+        ctx.config.token = Some(created.secret.clone());
+        ctx.api.token = Some(created.secret.clone());
+        ctx.save_config()?;
+        if !ctx.json {
+            println!("  stored the new secret as your active key");
+        }
+    }
+    Ok(())
+}
+
+async fn api_key_revoke(ctx: &Ctx, id: Option<String>) -> Result<(), CliError> {
+    let id = resolve_key_id(ctx, id).await?;
+    ctx.api
+        .post(&format!("/api-keys/{id}/revoke"), &json!({}))
+        .await?;
+    if ctx.json {
+        println!("{{\"revoked\":\"{id}\"}}");
+    } else {
+        println!("revoked {id}");
+    }
+    Ok(())
+}
+
+/// Resolve the key id when the command did not pass one: use the single active
+/// key, and refuse when the answer is ambiguous.
+async fn resolve_key_id(ctx: &Ctx, id: Option<String>) -> Result<String, CliError> {
+    if let Some(id) = id {
+        if id.trim().is_empty() {
+            return Err(CliError::usage("empty api key id"));
+        }
+        return Ok(id);
+    }
+    let res = ctx.api.get_json::<ApiKeyListResponse>("/api-keys").await?;
+    let active: Vec<&crate::wire::ApiKey> = res
+        .api_keys
+        .iter()
+        .filter(|k| k.revoked_at.is_none())
+        .collect();
+    match active.len() {
+        1 => Ok(active[0].id.clone()),
+        0 => Err(CliError::usage("no active api keys to operate on")),
+        n => Err(CliError::usage(format!(
+            "{n} api keys are active; pass the key id explicitly"
+        ))),
+    }
 }

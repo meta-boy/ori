@@ -286,6 +286,26 @@ impl Provider for ProxmoxAdapter {
         }
     }
 
+    async fn capacity(&self) -> Result<proto::HostCapacity, proto::ProviderError> {
+        let node = self
+            .inner
+            .client()
+            .node_status()
+            .await
+            .map_err(|e| proto::ProviderError::Failed(format!("node status: {e}")))?;
+        let storage = self
+            .inner
+            .client()
+            .storage_status(&self.inner.config().storage)
+            .await
+            .map_err(|e| proto::ProviderError::Failed(format!("storage status: {e}")))?;
+        let free_memory = node.memory.total.saturating_sub(node.memory.used);
+        Ok(proto::HostCapacity {
+            storage_avail_gb: storage.avail as f64 / (1024.0 * 1024.0 * 1024.0),
+            free_memory_gb: free_memory as f64 / (1024.0 * 1024.0 * 1024.0),
+        })
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

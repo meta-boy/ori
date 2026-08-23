@@ -54,6 +54,12 @@ pub struct Config {
     /// permanently ~20x slower to clone from (docs/BENCHMARKS.md).
     /// `ORI_POOL_GOLDEN` env / `--pool-golden` flag.
     pub pool_golden: Option<String>,
+
+    /// Rootfs footprint per pool slot / sandbox in GB, used by the host
+    /// capacity guard exactly as `scripts/preflight.sh` §6 does
+    /// (`ORI_POOL_HEADROOM_GB = storage_avail_gb - pool_depth * slot_gb`).
+    /// `ORI_POOL_SLOT_GB` env, default 8 (matches the Proxmox `ROOTFS_SIZE_GB`).
+    pub pool_slot_gb: u32,
 }
 
 impl Default for Config {
@@ -68,6 +74,7 @@ impl Default for Config {
             default_ttl_seconds: 900,
             pool_depth: 0,
             pool_golden: None,
+            pool_slot_gb: 8,
         }
     }
 }
@@ -114,6 +121,13 @@ impl Config {
         if let Ok(v) = std::env::var("ORI_POOL_GOLDEN") {
             if !v.is_empty() {
                 cfg.pool_golden = Some(v);
+            }
+        }
+        if let Ok(v) = std::env::var("ORI_POOL_SLOT_GB") {
+            if let Ok(n) = v.parse::<u32>() {
+                if n > 0 {
+                    cfg.pool_slot_gb = n;
+                }
             }
         }
         cfg

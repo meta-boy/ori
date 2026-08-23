@@ -1,6 +1,6 @@
 # Status
 
-**Final state:** build clean · `cargo fmt --check` clean · 167 tests passing,
+**Final state:** build clean · `cargo fmt --check` clean · 189 tests passing,
 0 failing · 1 clippy warning (a 10-argument function — a missing struct) ·
 88 files, ~19k lines · 31 commits, clean tree.
 
@@ -57,17 +57,35 @@ vmid.
 Every one of these responds `not implemented in this build` and exits non-zero.
 None of them pretend to work.
 
-`ssh` · `scp` · `forward` · `host` · `desktop` · `limits` · `snapshots` ·
-`snapshot` · `env` · `api-key` · `webhook` · `team` · `data-retention` ·
-`dashboard` · `self-update` · `prompt` · `interrupt` · `events`
+`ssh` · `scp` · `forward` · `host` · `desktop` · `snapshots` · `snapshot` ·
+`env` · `webhook` · `team` · `data-retention` · `dashboard` · `self-update` ·
+`prompt` · `interrupt` · `events`
 
 `ssh`, `scp`, `forward`, `host` and `desktop` all depend on the guest agent and
 the control-plane tunnel. `prompt`/`interrupt`/`events` drive a coding agent
 inside the sandbox and were scoped out of v1 deliberately.
 
+## C16 — advertised-but-missing commands wired (mock-verified)
+
+These were holes in behaviour the API already advertised — the API returned a
+value and gave no way to act on it. All wired through the real CLI against a
+running `ori serve --provider mock`:
+
+| command | what was missing | now |
+|---|---|---|
+| `ori extend` | the auto-stop deadline could not be moved | wired to `POST /sandboxes/{id}/extend`; past deadlines refused; response states the new deadline. The **reaper** honours it: a test extends a sandbox past its original TTL, runs `reap_expired`, and proves the sandbox survives the old deadline and dies on the new one |
+| `ori operation` | the `oriop_…` id from `delete` was unqueryable | wired to `GET /operations/{id}`; renders `pending\|processing\|blocked\|completed`; `blocked` reports *why* (a snapshot with a dependent incremental cannot be deleted) |
+| `ori api-key` | keys could not be listed, rotated or revoked | `create`/`list`/`rotate`/`revoke`; list shows prefix + last four only, the secret is shown once at creation; `rotate` revokes the old key and mints a new secret |
+| `ori limits` | **removed** — a quota nobody enforced reads as a guarantee | replaced with a **host capacity guard**: `new` is refused when thin-pool headroom (storage avail − warm-pool footprint, the `scripts/preflight.sh` §6 arithmetic) or free memory cannot fit the requested machine type, naming the short resource |
+
+The per-account `plan`/quota concept is gone from the API (`/me` no longer
+reports a plan; `/limits` endpoint deleted). The old `create_hits_quota` and
+`limits_reflects_counts` tests were replaced by capacity-guard tests that prove
+the refusal names the short resource and that nothing is created.
+
 **This is not yet a full clone of the reference feature surface.** The core
-lifecycle — create, exec, snapshot, stop, resume, fork, delete — is real and
-measured. The access and account-management commands are not built.
+lifecycle — create, exec, snapshot, stop, resume, fork, delete, extend — is
+real and measured. The access and account-management commands are not built.
 
 ## Release binary — verified
 
@@ -147,4 +165,4 @@ of these pre-started and claiming one per `ori new`.
 
 ## Tests
 
-`cargo build --workspace` clean. `cargo test --workspace`: **103 passing, 0 failing.**
+`cargo build --workspace` clean. `cargo test --workspace`: **189 passing, 0 failing.**

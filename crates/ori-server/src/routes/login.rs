@@ -178,7 +178,6 @@ pub async fn login_poll(
                 account: Some(Account {
                     identifier: "default".into(),
                     login_state: "active".into(),
-                    plan: "free".into(),
                     status: "active".into(),
                 }),
             }))

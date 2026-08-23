@@ -8,7 +8,6 @@ Client honours `--api-url` and the `ORI_API_URL` environment variable.
 | Method + path | Purpose |
 |---|---|
 | `GET  /me` | account identity, login state |
-| `GET  /limits` | plan, quota, rate limits |
 | `GET  /sandboxes` | list; `pageInfo{hasMore,limit,nextCursor}` |
 | `POST /sandboxes` | create — **streams NDJSON** |
 | `GET  /sandboxes/{id}` | detail — `{"sandbox": {...}}` |
@@ -150,10 +149,15 @@ One source of truth (`ori-proto`); no other crate restates these numbers.
   client polls `/cli/login/poll/{id}` until a token is issued. Token cached in
   the client config file at mode 0600.
 
-`GET /me` + `GET /limits` back `ori status`:
+`POST /sandboxes` **refuses** (`409 capacity_exceeded`) when the host cannot
+take another sandbox for the requested machine type — thin-pool headroom after
+the warm-pool footprint (the `scripts/preflight.sh` §6 arithmetic) or free
+memory is short, and the message names which resource.
+
+`GET /me` backs `ori status`:
 
 ```json
-{"account":{"identifier":"...","loginState":"active","plan":"...","status":"active"},
+{"account":{"identifier":"...","loginState":"active","status":"active"},
  "api":{"healthy":true,"status":"healthy","url":"...","error":null},
  "config":{"apiUrl":"...","channel":"stable","path":"..."}}
 ```

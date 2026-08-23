@@ -4,7 +4,8 @@ use reqwest::Method;
 use serde::de::DeserializeOwned;
 
 use super::dto::{
-    ContentEntry, Interface, NextId, NodeEntry, StorageEntry, TaskStatus, VmConfig, VmStatusCurrent,
+    ContentEntry, Interface, NextId, NodeEntry, NodeStatus, StorageEntry, StorageStatus,
+    TaskStatus, VmConfig, VmStatusCurrent,
 };
 use super::error::PveError;
 
@@ -277,6 +278,18 @@ impl PveClient {
     /// `GET /nodes/{node}/storage`.
     pub async fn storages(&self) -> Result<Vec<StorageEntry>, PveError> {
         self.get(&format!("nodes/{}/storage", self.node)).await
+    }
+
+    /// `GET /nodes/{node}/status` — node memory, for the host capacity guard.
+    pub async fn node_status(&self) -> Result<NodeStatus, PveError> {
+        self.get(&format!("nodes/{}/status", self.node)).await
+    }
+
+    /// `GET /nodes/{node}/storage/{storage}/status` — thin-pool headroom, for
+    /// the host capacity guard.
+    pub async fn storage_status(&self, storage: &str) -> Result<StorageStatus, PveError> {
+        self.get(&format!("nodes/{}/storage/{storage}/status", self.node))
+            .await
     }
 
     /// `GET /nodes/{node}/storage/{storage}/content?content={content_type}`.

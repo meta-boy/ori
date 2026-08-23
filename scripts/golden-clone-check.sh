@@ -8,7 +8,12 @@
 # clone must boot to a working sandbox (sshd loopback, docker, git, work user,
 # DHCP address). When the golden ships the desktop stack (plans/C18-desktop.md)
 # it also proves X is up, VNC/websockify listen on loopback only, and websockify
-# completes a real WebSocket handshake against the VNC backend.
+# completes a real WebSocket handshake against the VNC backend. When the golden
+# ships the agent (plans/C25-agent-autostart.md) it also proves the agent is
+# tunnel-ready with no provisioning step: the supervisor waits for
+# /etc/ori/agent.json (a pooled clone boots before it is claimed), the agent
+# connects to a running control plane the moment a valid config is dropped in,
+# and reconnects on its own after a reboot.
 #
 # The clone vmid is taken from the test range (9000-9099) and destroyed when
 # done -- including on failure (trap).
@@ -48,8 +53,15 @@ echo "using scratch clone vmid $CLONE (test range, cleaned up after)"
 cleanup() {
   echo "cleaning up scratch clone $CLONE"
   cid_destroy "$CLONE" 2>/dev/null || true
+  # kill the C25 control plane + scratch dir started on the host, if any
+  if [ -n "${CC_DIR:-}" ]; then
+    pve_ssh "kill \$(cat $CC_DIR/serve.pid 2>/dev/null) 2>/dev/null; pkill -f '$CC_DIR/serve.db' 2>/dev/null; rm -rf $CC_DIR" 2>/dev/null || true
+  fi
+  rm -rf "${LOCAL_TMP:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+LOCAL_TMP="$(mktemp -d)"
 
 TIER=$(pve_get "/api2/json/nodes/$ORI_NODE/lxc/$GOLDEN/config" | jq -r '.data.ostype // empty')
 [ -n "$TIER" ] || TIER=ubuntu
@@ -187,12 +199,92 @@ else
   echo "  [skip] desktop checks (golden has no ori-desktop supervisor)"
 fi
 
+# ---------------------------------------------------------------------------
+# agent autostart (C25): a pooled clone is tunnel-ready with no provisioning
+# step. Verified the way the pool uses it:
+#   1. the supervisor is running and *waiting* at boot -- a pool member is
+#      cloned before it is claimed, so /etc/ori/agent.json is absent then, and
+#      the unit must wait rather than fail;
+#   2. drop a valid agent.json in and the agent connects to a running control
+#      plane with no other action;
+#   3. reboot the container and the agent reconnects on its own.
+# The control plane runs on the PVE host using the exact binary baked into the
+# clone (pct pull), so this proves the shipped artifact, not a local one.
+# ---------------------------------------------------------------------------
+agent_present=$(pve_ssh "pct exec $CLONE -- sh -c 'test -x /usr/local/bin/ori && echo yes || echo no'" 2>/dev/null || true)
+if [ "$agent_present" = "yes" ]; then
+  echo "  [ok] agent binary present (/usr/local/bin/ori)"
+
+  # 1. supervisor waiting for the config (absent at clone time)
+  sup_ok=$(pve_ssh "pct exec $CLONE -- sh -c 'pgrep -f /usr/local/sbin/ori-agent >/dev/null && echo yes || echo no'" 2>/dev/null || true)
+  [ "$sup_ok" = "yes" ] && echo "  [ok] agent supervisor running (waiting for /etc/ori/agent.json)" || { echo "  [fail] agent supervisor not running"; fail=1; }
+
+  log_ok=$(pve_ssh "pct exec $CLONE -- sh -c 'test -f /var/log/ori-agent/agent.log && echo yes || echo no'" 2>/dev/null || true)
+  [ "$log_ok" = "yes" ] && echo "  [ok] agent log present at /var/log/ori-agent/agent.log" || { echo "  [fail] agent log missing"; fail=1; }
+
+  # 2. control plane on the host + valid agent.json -> agent connects, no other action
+  CC_DIR="/var/tmp/ori-clone-check-$CLONE"
+  CC_PORT=$(( 38000 + (CLONE % 1000) ))
+  pve_ssh "rm -rf $CC_DIR && mkdir -p $CC_DIR"
+  pve_ssh "pct pull $CLONE /usr/local/bin/ori $CC_DIR/ori && chmod +x $CC_DIR/ori"
+  HOST_IP=$(pve_ssh "ip -4 addr show dev $ORI_BRIDGE 2>/dev/null | awk '/inet /{print \$2}' | cut -d/ -f1 | head -1" 2>/dev/null || true)
+  [ -n "$HOST_IP" ] || { echo "  [fail] could not determine host bridge IP for the control plane"; fail=1; }
+
+  if [ -n "$HOST_IP" ]; then
+    pve_ssh "cd $CC_DIR && setsid ./ori serve --provider mock --bind $HOST_IP:$CC_PORT --db-path $CC_DIR/serve.db > $CC_DIR/serve.log 2>&1 < /dev/null & echo \$! > $CC_DIR/pid"
+    plane_ok=no
+    for _i in $(seq 1 30); do
+      pve_ssh "grep -q 'control plane listening' $CC_DIR/serve.log 2>/dev/null" && { plane_ok=yes; break; }
+      sleep 1
+    done
+    [ "$plane_ok" = "yes" ] && echo "  [ok] control plane listening on :$CC_PORT" || { echo "  [fail] control plane did not start"; pve_ssh "tail -n 20 $CC_DIR/serve.log" 2>/dev/null || true; fail=1; }
+
+    if [ "$plane_ok" = "yes" ]; then
+      # seed the sandbox row the tunnel auth checks (token must match agent.json)
+      SANDBOX="ori_cc_$CLONE"
+      TOKEN="orit_cc_$CLONE"
+      NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      printf "INSERT INTO sandboxes (id, account_id, name, state, machine_type, slug, provider, provider_handle, created_at, updated_at, agent_token) VALUES ('%s','default','clone-check','ready','default','cc-%s','mock','cc-%s','%s','%s','%s');\n" \
+        "$SANDBOX" "$CLONE" "$CLONE" "$NOW" "$NOW" "$TOKEN" \
+        | pve_ssh "sqlite3 $CC_DIR/serve.db"
+
+      printf '{"controlPlaneUrl":"ws://%s:%s/api/v1/agent/tunnel","token":"%s","sandboxId":"%s","workDir":"/home/work/work"}' \
+        "$HOST_IP" "$CC_PORT" "$TOKEN" "$SANDBOX" > "$LOCAL_TMP/agent.json"
+      pve_ssh "cat > $CC_DIR/agent.json" < "$LOCAL_TMP/agent.json"
+      pve_ssh "pct push $CLONE $CC_DIR/agent.json /etc/ori/agent.json && pct exec $CLONE -- sh -c 'chmod 0600 /etc/ori/agent.json && chown root:root /etc/ori/agent.json'"
+
+      conn_ok=no
+      for _i in $(seq 1 45); do
+        pve_ssh "grep -q 'agent tunnel connected' $CC_DIR/serve.log 2>/dev/null" && { conn_ok=yes; break; }
+        sleep 1
+      done
+      [ "$conn_ok" = "yes" ] && echo "  [ok] agent connected to the control plane (no other action)" || { echo "  [fail] agent did not connect to the control plane"; pve_ssh "tail -n 20 $CC_DIR/serve.log" 2>/dev/null || true; fail=1; }
+
+      # 3. reboot -> reconnects on its own
+      pve_ssh "pct reboot $CLONE" 2>/dev/null || true
+      for _i in $(seq 1 90); do
+        pve_ssh "pct exec $CLONE -- true >/dev/null 2>&1" && break
+        sleep 1
+      done
+      recon_ok=no
+      for _i in $(seq 1 60); do
+        n=$(pve_ssh "grep -c 'agent tunnel connected' $CC_DIR/serve.log" 2>/dev/null || true)
+        if [ -n "$n" ] && [ "$n" -ge 2 ]; then recon_ok=yes; break; fi
+        sleep 1
+      done
+      [ "$recon_ok" = "yes" ] && echo "  [ok] after reboot the agent reconnected on its own" || { echo "  [fail] agent did not reconnect after reboot"; pve_ssh "tail -n 20 $CC_DIR/serve.log" 2>/dev/null || true; fail=1; }
+    fi
+  fi
+else
+  echo "  [skip] agent checks (golden has no /usr/local/bin/ori)"
+fi
+
 echo
 echo "== summary =="
 echo "  clone ($GOLDEN -> $CLONE): ${CLONE_S}s"
 echo "  start -> exec-ready:       ${BOOT_S}s"
 if [ "$fail" = "0" ]; then
-  echo "  sandbox verified:          PASS (sshd loopback, docker, git, work user, DHCP, desktop)"
+  echo "  sandbox verified:          PASS (sshd loopback, docker, git, work user, DHCP, desktop, agent autostart)"
   echo "OK: golden $GOLDEN produces a working sandbox"
 else
   echo "  sandbox verified:          FAIL"

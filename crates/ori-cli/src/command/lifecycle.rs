@@ -5,14 +5,17 @@ use std::io::{self, Write};
 
 use reqwest::Response;
 
-use crate::cli::{DeleteArgs, ForkArgs, InfoArgs, ListArgs, NewArgs, ResumeArgs, StopArgs};
+use crate::cli::{
+    DeleteArgs, ExtendArgs, ForkArgs, InfoArgs, ListArgs, NewArgs, OperationArgs, ResumeArgs,
+    StopArgs,
+};
 use crate::context::Ctx;
 use crate::error::{ApiError, CliError};
 use crate::render::{print_json, table_string};
 use crate::stream::consume_ndjson;
 use crate::wire::{
-    valid_types, CreateRequest, Event, ReadyInfo, Sandbox, SandboxListResponse, SandboxResponse,
-    StopRequest,
+    valid_types, CreateRequest, Event, ExtendResponse, OperationResponse, ReadyInfo, Sandbox,
+    SandboxListResponse, SandboxResponse, StopRequest,
 };
 
 pub async fn new(args: NewArgs, ctx: &Ctx) -> Result<(), CliError> {
@@ -168,6 +171,71 @@ pub async fn delete(args: DeleteArgs, ctx: &Ctx) -> Result<(), CliError> {
         println!("{text}");
     } else {
         println!("deleted {}", args.id);
+    }
+    Ok(())
+}
+
+pub async fn extend(args: ExtendArgs, ctx: &Ctx) -> Result<(), CliError> {
+    let mut req = serde_json::Map::new();
+    if let Some(h) = args.hours {
+        req.insert("hours".into(), serde_json::json!(h));
+    }
+    if let Some(t) = args.ttl {
+        req.insert("ttlSeconds".into(), serde_json::json!(t));
+    }
+    if args.no_auto_stop {
+        req.insert("noAutoStop".into(), serde_json::json!(true));
+    }
+    if req.is_empty() {
+        return Err(CliError::usage(
+            "one of --hours, --ttl, --no-auto-stop is required",
+        ));
+    }
+    let res = ctx
+        .api
+        .post_json::<ExtendResponse>(
+            &format!("/sandboxes/{}/extend", args.id),
+            &serde_json::Value::Object(req),
+        )
+        .await?;
+    if ctx.json {
+        print_json(&res)?;
+    } else {
+        match &res.stop_after {
+            Some(deadline) => println!("{}: new auto-stop deadline {}", args.id, deadline),
+            None => println!("{}: auto-stop disabled", args.id),
+        }
+    }
+    Ok(())
+}
+
+pub async fn operation(args: OperationArgs, ctx: &Ctx) -> Result<(), CliError> {
+    let res = ctx
+        .api
+        .get_json::<OperationResponse>(&format!("/operations/{}", args.id))
+        .await?;
+    let op = &res.operation;
+    if ctx.json {
+        print_json(&res)?;
+        return Ok(());
+    }
+    println!("{}  {}", op.id, op.status);
+    if let Some(reason) = &op.blocked_reason {
+        println!("  blocked: {reason}");
+    }
+    if let Some(err) = &op.error {
+        println!("  error: {err}");
+    }
+    match op.status.as_str() {
+        "completed" => {
+            if let Some(t) = &op.completed_at {
+                println!("  completed at: {t}");
+            }
+        }
+        "pending" | "processing" => {
+            println!("  created: {} · updated: {}", op.created_at, op.updated_at)
+        }
+        _ => {}
     }
     Ok(())
 }

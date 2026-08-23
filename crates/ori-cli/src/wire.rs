@@ -66,6 +66,40 @@ pub struct SandboxResponse {
     pub sandbox: Sandbox,
 }
 
+/// `POST /sandboxes/{id}/extend` — the new deadline is stated at the top level
+/// so a caller can see what `extend` produced without re-reading the sandbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtendResponse {
+    pub sandbox: Sandbox,
+    #[serde(default)]
+    pub stop_after: Option<String>,
+}
+
+/// `GET /operations/{id}` — async deletion operation status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationResponse {
+    pub operation: Operation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Operation {
+    pub id: String,
+    pub sandbox_id: String,
+    /// pending | processing | blocked | completed
+    pub status: String,
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StopRequest {
@@ -157,8 +191,6 @@ pub struct MeResponse {
     #[serde(default)]
     pub login_state: String,
     #[serde(default)]
-    pub plan: String,
-    #[serde(default)]
     pub status: String,
 }
 
@@ -176,7 +208,6 @@ pub struct StatusOutput {
 pub struct AccountStatus {
     pub identifier: String,
     pub login_state: String,
-    pub plan: String,
     pub status: String,
 }
 
@@ -195,6 +226,49 @@ pub struct ConfigStatus {
     pub api_url: String,
     pub channel: String,
     pub path: String,
+}
+
+/// `GET /api-keys` — prefix + last four only; the secret is never returned
+/// again after creation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyListResponse {
+    pub api_keys: Vec<ApiKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKey {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub prefix: String,
+    pub last_four: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+}
+
+/// `POST /api-keys` — the secret is present exactly once, at creation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyCreated {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub prefix: String,
+    pub last_four: String,
+    pub secret: String,
+    pub created_at: String,
+}
+
+/// `POST /api-keys/{id}/rotate` — a fresh key plus whether the rotated key was
+/// the one authenticating this request (the caller's stored token is now dead).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyRotated {
+    pub api_key: ApiKeyCreated,
+    pub current: bool,
 }
 
 /// NDJSON lifecycle events for `new` / `resume` / `fork`. Serialises to the

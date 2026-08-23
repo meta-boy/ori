@@ -78,7 +78,7 @@ across resume and fork, and inherited secrets are scrubbed.
 
 ## Account
 
-`login [key]` (`--google`, `--email <addr>`), `logout`, `status`, `limits`,
+`login [key]` (`--google`, `--email <addr>`), `logout`, `status`,
 `api-key {create,list,rotate,revoke}`, `webhook {create,list,rotate,remove}`,
 `team {list,switch}`, `data-retention {status,enable}`, `dashboard`,
 `self-update`, `completions <bash|zsh|fish|powershell>`.

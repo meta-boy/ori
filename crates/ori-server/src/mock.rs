@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::proto::{
-    Addresses, Capabilities, ExecRequest, ExecResult, InstanceHandle, InstanceSpec, InstanceStatus,
-    MachineType, Provider, ProviderError, SnapshotRef, StopMode,
+    Addresses, Capabilities, ExecRequest, ExecResult, HostCapacity, InstanceHandle, InstanceSpec,
+    InstanceStatus, MachineType, Provider, ProviderError, SnapshotRef, StopMode,
 };
 
 #[derive(Debug, Clone)]
@@ -28,6 +28,10 @@ pub struct MockRegistry {
 
 pub struct MockProvider {
     pub registry: Arc<Mutex<MockRegistry>>,
+    /// Capacity reported to the `new` guard. Defaults are effectively
+    /// unlimited so tests that do not care about capacity pass; a test can
+    /// shrink it to force a refusal and assert the resource name.
+    pub capacity: Mutex<HostCapacity>,
     pub create_delay: Duration,
     /// When set, the next `create` fails with `Unavailable` — used to test
     /// the error event on the NDJSON stream.
@@ -40,6 +44,10 @@ impl MockProvider {
     pub fn new() -> Self {
         MockProvider {
             registry: Arc::new(Mutex::new(MockRegistry::default())),
+            capacity: Mutex::new(HostCapacity {
+                storage_avail_gb: 100_000.0,
+                free_memory_gb: 10_000.0,
+            }),
             create_delay: Duration::ZERO,
             fail_next_create: AtomicBool::new(false),
             next_seq: AtomicU64::new(1),
@@ -96,6 +104,10 @@ impl Provider for MockProvider {
             nested_containers: true,
             max_instances: Some(100),
         }
+    }
+
+    async fn capacity(&self) -> Result<HostCapacity, ProviderError> {
+        Ok(*self.capacity.lock().unwrap())
     }
 
     async fn create(&self, _spec: &InstanceSpec) -> Result<InstanceHandle, ProviderError> {

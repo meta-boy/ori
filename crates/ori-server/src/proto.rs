@@ -265,6 +265,13 @@ pub enum MachineType {
 }
 
 impl MachineType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MachineType::Small => "small",
+            MachineType::Default => "default",
+            MachineType::Large => "large",
+        }
+    }
     pub fn vcpu(&self) -> u32 {
         match self {
             MachineType::Small => 2,
@@ -409,6 +416,17 @@ pub struct Sandbox {
 #[serde(rename_all = "camelCase")]
 pub struct SandboxDetail {
     pub sandbox: Sandbox,
+}
+
+/// `POST /sandboxes/{id}/extend` response. The new deadline is stated at the
+/// top level as well as on the sandbox: a caller must be able to see exactly
+/// what `extend` produced without re-reading `sandbox.stopAfter`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtendResponse {
+    pub sandbox: Sandbox,
+    /// The new auto-stop deadline (`null` = auto-stop disabled).
+    pub stop_after: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -578,27 +596,25 @@ pub struct ApiKeyList {
     pub api_keys: Vec<ApiKey>,
 }
 
-// -- account / limits / teams ------------------------------------------------
+/// `POST /api-keys/{id}/rotate` response: a fresh key (secret shown once) plus
+/// whether the rotated key was the one that authenticated the request — when
+/// true, the caller's stored token is now dead and must be replaced with the
+/// returned secret.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyRotated {
+    pub api_key: ApiKeyCreated,
+    pub current: bool,
+}
+
+// -- account ----------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     pub identifier: String,
     pub login_state: String,
-    pub plan: String,
     pub status: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Limits {
-    pub plan: String,
-    pub max_running_sandboxes: i64,
-    pub max_total_sandboxes: i64,
-    pub max_storage_gb: i64,
-    pub current_running: i64,
-    pub current_total: i64,
-    pub rate_limit_per_minute: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -671,6 +687,20 @@ pub struct Capabilities {
     pub desktop: bool,
     pub nested_containers: bool,
     pub max_instances: Option<u32>,
+}
+
+/// A snapshot of host capacity for the `new` capacity guard. The arithmetic is
+/// the same one `scripts/preflight.sh` §6 uses (`ORI_POOL_HEADROOM_GB`): the
+/// server subtracts the warm-pool footprint (`pool_depth * slot_gb`) from
+/// `storage_avail_gb` and compares the resulting headroom and `free_memory_gb`
+/// against the requested machine type.
+#[derive(Debug, Clone, Copy)]
+pub struct HostCapacity {
+    /// Free thin-pool storage on the container storage, in GB (`avail` from
+    /// `GET /nodes/{node}/storage/{storage}/status`).
+    pub storage_avail_gb: f64,
+    /// Free memory on the node, in GB (`total - used` from the node status).
+    pub free_memory_gb: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -763,6 +793,11 @@ pub enum ProviderError {
 pub trait Provider: Send + Sync {
     fn name(&self) -> &'static str;
     fn capabilities(&self) -> Capabilities;
+
+    /// Snapshot of host capacity for the `new` capacity guard. A provider that
+    /// cannot answer is a **fail-closed** signal: `new` refuses rather than
+    /// risk filling the host (the leaked-container incident that drove this).
+    async fn capacity(&self) -> Result<HostCapacity, ProviderError>;
 
     /// Downcast hook so the server can reach provider-specific internals
     /// (e.g. enumerating instances for orphan detection) without leaking

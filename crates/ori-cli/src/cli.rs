@@ -78,8 +78,6 @@ pub enum Command {
     Logout(LogoutArgs),
     /// Account, api, config
     Status(StatusArgs),
-    /// Plan, quota, rate limits
-    Limits(LimitsArgs),
     /// Manage API keys
     #[command(subcommand)]
     ApiKey(ApiKeyCommand),
@@ -446,9 +444,6 @@ pub struct LogoutArgs {}
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
-
-#[derive(Debug, Args)]
-pub struct LimitsArgs {}
 
 #[derive(Debug, Subcommand)]
 pub enum ApiKeyCommand {

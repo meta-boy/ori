@@ -22,8 +22,8 @@ use super::{ClaimResult, PoolConfig, PoolKey, PoolManager};
 use crate::db;
 use crate::mock::MockProvider;
 use crate::proto::{
-    Addresses, Capabilities, ExecRequest, ExecResult, InstanceHandle, InstanceSpec, InstanceStatus,
-    MachineType, Provider, ProviderError, SnapshotRef, StopMode,
+    Addresses, Capabilities, ExecRequest, ExecResult, HostCapacity, InstanceHandle, InstanceSpec,
+    InstanceStatus, MachineType, Provider, ProviderError, SnapshotRef, StopMode,
 };
 use crate::util::now_ts;
 
@@ -408,6 +408,9 @@ impl Provider for LatencyProvider {
     }
     fn capabilities(&self) -> Capabilities {
         self.inner.capabilities()
+    }
+    async fn capacity(&self) -> Result<HostCapacity, ProviderError> {
+        self.inner.capacity().await
     }
     async fn create(&self, spec: &InstanceSpec) -> Result<InstanceHandle, ProviderError> {
         self.inner.create(spec).await

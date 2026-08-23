@@ -19,7 +19,7 @@ use ori_server::config::Config;
 use ori_server::db;
 use ori_server::mock::MockProvider;
 use ori_server::pool::{PoolConfig, PoolKey, PoolManager};
-use ori_server::proto::{MachineType, Provider, SnapshotRef};
+use ori_server::proto::{HostCapacity, MachineType, Provider, SnapshotRef};
 use ori_server::state::AppState;
 use ori_server::tasks;
 
@@ -166,7 +166,6 @@ async fn bootstrap_mints_first_key_and_it_authenticates() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["identifier"], "default");
     assert_eq!(v["loginState"], "active");
-    assert_eq!(v["plan"], "free");
     assert_eq!(v["status"], "active");
 
     // second key without a token must now be rejected (bootstrap is over)
@@ -219,27 +218,60 @@ async fn revoke_kills_the_key() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-// ---------------------------------------------------------------------------
-// account / limits / teams
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
-async fn limits_reflects_counts() {
+async fn rotate_revokes_the_old_key_and_mints_a_new_secret() {
     let t = test_app().await;
-    let token = bootstrap_key(&t.app).await;
-    let (_, id) = create_sandbox(&t.app, &token, json!({})).await;
-    let _ = id;
+    let secret = bootstrap_key(&t.app).await;
+    let (_status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/api-keys", Some(&secret), None),
+    )
+    .await;
+    let id = v["apiKeys"][0]["id"].as_str().unwrap().to_string();
+
     let (status, v) = call_json(
         &t.app,
-        req(Method::GET, "/api/v1/limits", Some(&token), None),
+        req(
+            Method::POST,
+            &format!("/api/v1/api-keys/{id}/rotate"),
+            Some(&secret),
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(v["plan"], "free");
-    assert_eq!(v["currentTotal"], 1);
-    assert_eq!(v["currentRunning"], 1);
-    assert!(v["maxRunningSandboxes"].as_i64().unwrap() > 0);
+    let new_secret = v["apiKey"]["secret"].as_str().unwrap().to_string();
+    assert_ne!(new_secret, secret, "rotate must mint a fresh secret");
+    assert_eq!(v["apiKey"]["name"], Value::Null);
+    // the rotated key authenticated this request, so `current` is true
+    assert_eq!(v["current"], true);
+
+    // old secret is dead, new one works
+    let (status, _) = call_json(&t.app, req(Method::GET, "/api/v1/me", Some(&secret), None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/me", Some(&new_secret), None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // listing shows the old key revoked and the new one active
+    let (_, list) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/api-keys", Some(&new_secret), None),
+    )
+    .await;
+    let keys = list["apiKeys"].as_array().unwrap();
+    assert_eq!(keys.len(), 2);
+    let active: Vec<_> = keys.iter().filter(|k| k["revokedAt"].is_null()).collect();
+    assert_eq!(active.len(), 1, "exactly one active key after rotation");
+    assert_eq!(active[0]["id"], v["apiKey"]["id"]);
 }
+
+// ---------------------------------------------------------------------------
+// account / teams
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn teams_is_single_personal_scope() {
@@ -485,24 +517,83 @@ async fn create_rejects_snapshot_from() {
 }
 
 #[tokio::test]
-async fn create_hits_quota() {
+async fn create_refuses_when_thin_pool_storage_is_short() {
     let t = test_app().await;
+    // storage below one slot (default slot_gb = 8): the pool footprint eats
+    // the headroom and a default sandbox needs 8 GB
+    *t.provider.capacity.lock().unwrap() = HostCapacity {
+        storage_avail_gb: 4.0,
+        free_memory_gb: 10_000.0,
+    };
     let token = bootstrap_key(&t.app).await;
-    for _ in 0..20 {
-        create_sandbox(&t.app, &token, json!({})).await;
-    }
     let (status, v) = call_json(
         &t.app,
         req(
             Method::POST,
             "/api/v1/sandboxes",
             Some(&token),
-            Some(json!({})),
+            Some(json!({ "type": "default" })),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(v["error"]["code"], "quota_exceeded");
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(v["error"]["code"], "capacity_exceeded");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("storage"),
+        "must name the short resource: {msg}"
+    );
+    assert!(
+        msg.contains("headroom"),
+        "must reuse preflight headroom: {msg}"
+    );
+    // nothing was created
+    let (_, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/sandboxes", Some(&token), None),
+    )
+    .await;
+    assert_eq!(v["sandboxes"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn create_refuses_when_host_memory_is_short() {
+    let t = test_app().await;
+    // plenty of storage, but free memory cannot fit a `large` (16 GB) sandbox
+    *t.provider.capacity.lock().unwrap() = HostCapacity {
+        storage_avail_gb: 100_000.0,
+        free_memory_gb: 8.0,
+    };
+    let token = bootstrap_key(&t.app).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            "/api/v1/sandboxes",
+            Some(&token),
+            Some(json!({ "type": "large" })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(v["error"]["code"], "capacity_exceeded");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("memory"),
+        "must name the short resource: {msg}"
+    );
+    assert!(msg.contains("large"), "must name the machine type: {msg}");
+}
+
+#[tokio::test]
+async fn create_allows_when_capacity_is_available() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    // default mock capacity is effectively unlimited: `new` succeeds
+    let (id, _) = create_sandbox(&t.app, &token, json!({ "type": "small" })).await;
+    let (status, v) = sandbox_info(&t.app, &token, &id).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["sandbox"]["state"], "ready");
 }
 
 #[tokio::test]
@@ -877,6 +968,94 @@ async fn delete_returns_operation_then_completes() {
     assert!(t.provider.registry.lock().unwrap().destroy_calls >= 1);
 }
 
+/// C16 priority 2: `blocked` must be reachable and report *why* — a snapshot
+/// with a dependent incremental cannot be deleted, and the operation must not
+/// sit in `pending` forever.
+#[tokio::test]
+async fn operation_reports_blocked_with_reason() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (id, _) = create_sandbox(&t.app, &token, json!({})).await;
+    let now = ori_server::util::now_ts();
+    // this sandbox's snapshot, with a dependent incremental built on it
+    sqlx::query(
+        "INSERT INTO snapshots (id, account_id, sandbox_id, name, provider_snapshot, state, \
+         is_incremental, parent_id, created_at, completed_at) \
+         VALUES (?, ?, ?, ?, ?, 'complete', 0, NULL, ?, ?)",
+    )
+    .bind("orisnap_parent")
+    .bind("default")
+    .bind(&id)
+    .bind("parent")
+    .bind("pve/100/parent")
+    .bind(&now)
+    .bind(&now)
+    .execute(&t.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO snapshots (id, account_id, sandbox_id, name, provider_snapshot, state, \
+         is_incremental, parent_id, created_at, completed_at) \
+         VALUES (?, ?, ?, ?, ?, 'complete', 1, 'orisnap_parent', ?, ?)",
+    )
+    .bind("orisnap_child")
+    .bind("default")
+    .bind("forked-child")
+    .bind("child")
+    .bind("pve/101/child")
+    .bind(&now)
+    .bind(&now)
+    .execute(&t.db)
+    .await
+    .unwrap();
+
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::DELETE,
+            &format!("/api/v1/sandboxes/{id}"),
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let op_id = v["operation"]["id"].as_str().unwrap().to_string();
+
+    // the operation reaches `blocked` and reports why (never `pending` forever)
+    let mut status_str = String::new();
+    let mut reason = String::new();
+    for _ in 0..50 {
+        let (s, v) = call_json(
+            &t.app,
+            req(
+                Method::GET,
+                &format!("/api/v1/operations/{op_id}"),
+                Some(&token),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        status_str = v["operation"]["status"].as_str().unwrap().to_string();
+        reason = v["operation"]["blockedReason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if status_str != "pending" && status_str != "processing" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(status_str, "blocked");
+    assert!(
+        reason.contains("incremental"),
+        "blocked must report why: {reason}"
+    );
+    // the provider instance was NOT destroyed
+    assert_eq!(t.provider.registry.lock().unwrap().destroy_calls, 0);
+}
+
 #[tokio::test]
 async fn exec_runs_and_reports_exit_codes() {
     let t = test_app().await;
@@ -1005,11 +1184,13 @@ async fn extend_moves_the_deadline() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let after = v["sandbox"]["stopAfter"].as_str().unwrap();
+    // the new deadline is stated at the top level, not just embedded
+    let after = v["stopAfter"].as_str().unwrap().to_string();
     assert_ne!(after, before);
-    assert!(
-        after > before.as_str(),
-        "deadline moved later: {after} <= {before}"
+    assert!(after > before, "deadline moved later: {after} <= {before}");
+    assert_eq!(
+        v["sandbox"]["stopAfter"], after,
+        "sandbox agrees with the stated deadline"
     );
 
     // no-auto-stop clears it
@@ -1025,7 +1206,108 @@ async fn extend_moves_the_deadline() {
         ),
     )
     .await;
+    assert_eq!(v["stopAfter"], Value::Null);
     assert_eq!(v["sandbox"]["stopAfter"], Value::Null);
+
+    // a deadline in the past is refused — extend can move later, never back
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/extend"),
+            Some(&token),
+            Some(json!({ "ttlSeconds": 0 })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"]["code"], "invalid_request");
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("in the past"));
+    let (_, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/extend"),
+            Some(&token),
+            Some(json!({ "hours": 0 })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// C16 priority 1: the reaper must honour the *new* deadline, not the old one.
+/// A test that only checked the API response would pass while the sandbox
+/// still died on the original schedule — so this drives the reaper directly.
+#[tokio::test]
+async fn reaper_honours_the_extended_deadline() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (id, _) = create_sandbox(&t.app, &token, json!({ "ttlSeconds": 1 })).await;
+    let state = AppState {
+        db: t.db.clone(),
+        provider: t.provider.clone(),
+        config: Default::default(),
+        pool: None,
+        agents: ori_server::tunnel::AgentRegistry::new(),
+    };
+
+    // the original 1 s deadline passes
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    // extend to +2 h before the reaper ever runs
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/extend"),
+            Some(&token),
+            Some(json!({ "hours": 2 })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let extended = v["stopAfter"].as_str().unwrap().to_string();
+    assert!(!extended.is_empty());
+
+    // the reaper must NOT reap the extended sandbox even though its ORIGINAL
+    // TTL has passed
+    tasks::reap_expired(&state).await.unwrap();
+    let (_, v) = sandbox_info(&t.app, &token, &id).await;
+    assert_eq!(
+        v["sandbox"]["state"], "ready",
+        "reaper killed the extended sandbox on its old deadline"
+    );
+
+    // control: a sandbox left on its own schedule does die
+    let (control, _) = create_sandbox(&t.app, &token, json!({ "ttlSeconds": 1 })).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    tasks::reap_expired(&state).await.unwrap();
+    let (_, v) = sandbox_info(&t.app, &token, &control).await;
+    assert_eq!(
+        v["sandbox"]["state"], "stopped",
+        "control sandbox did not die on its TTL"
+    );
+    // ...and the extended one is still alive
+    let (_, v) = sandbox_info(&t.app, &token, &id).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+
+    // the extended sandbox dies once ITS new deadline passes: move the stored
+    // deadline (the value extend wrote) into the past and re-reap
+    sqlx::query("UPDATE sandboxes SET stop_after = ? WHERE id = ?")
+        .bind("2000-01-01T00:00:00Z")
+        .bind(&id)
+        .execute(&t.db)
+        .await
+        .unwrap();
+    tasks::reap_expired(&state).await.unwrap();
+    let (_, v) = sandbox_info(&t.app, &token, &id).await;
+    assert_eq!(
+        v["sandbox"]["state"], "stopped",
+        "reaper must use the stored (extended) deadline"
+    );
 }
 
 // ---------------------------------------------------------------------------

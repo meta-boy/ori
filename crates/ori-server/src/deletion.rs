@@ -102,20 +102,10 @@ async fn run_deletion(state: AppState, op_id: String) {
         return;
     }
 
-    // The container is being destroyed, so its snapshots die with it. Clear
-    // the rows first, or `deletion_blocked` would flag every sandbox that was
-    // ever stopped (each now carries a persisted stopped-taken snapshot) and
-    // delete would be permanently `blocked`.
-    if let Err(e) = sqlx::query("DELETE FROM snapshots WHERE sandbox_id = ?")
-        .bind(&op.sandbox_id)
-        .execute(&state.db)
-        .await
-    {
-        tracing::error!(op = %op_id, error = %e, "deletion: clearing snapshot rows failed");
-    }
-
-    // blocked state: a snapshot with dependent incrementals. v1 exposes no
-    // snapshots, so nothing is ever blocked here.
+    // blocked: a snapshot with dependent incrementals cannot be deleted. Check
+    // before clearing rows — a dependent lives on another sandbox, so the
+    // clear would hide nothing — and record *why* rather than leaving the
+    // operation in `pending` forever.
     let blocked = deletion_blocked(&state, &op.sandbox_id).await;
     if let Some(reason) = blocked {
         let _ = sqlx::query(
@@ -127,6 +117,16 @@ async fn run_deletion(state: AppState, op_id: String) {
         .execute(&state.db)
         .await;
         return;
+    }
+
+    // The container is being destroyed, so its snapshots die with it. Clear
+    // the rows before destroy (best-effort).
+    if let Err(e) = sqlx::query("DELETE FROM snapshots WHERE sandbox_id = ?")
+        .bind(&op.sandbox_id)
+        .execute(&state.db)
+        .await
+    {
+        tracing::error!(op = %op_id, error = %e, "deletion: clearing snapshot rows failed");
     }
 
     let Some(sandbox) = crate::repo::get_sandbox_including_deleted(&state.db, &op.sandbox_id)
@@ -174,9 +174,16 @@ async fn complete_op(state: &AppState, op_id: &str, err: Option<&str>) -> Result
 }
 
 /// Returns a block reason if the sandbox cannot be deleted yet.
+///
+/// The blocking case is a **dependent incremental**: a snapshot whose parent
+/// chain references a snapshot of this sandbox (e.g. a forked sandbox built
+/// incrementally on this sandbox's stopped-taken snapshot). Deleting the
+/// parent snapshot would orphan it. A sandbox's own snapshots are *not* a
+/// block — they die with the container.
 async fn deletion_blocked(state: &AppState, sandbox_id: &str) -> Option<String> {
     let row: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM snapshots WHERE sandbox_id = ? AND state IN ('creating','complete')",
+        "SELECT count(*) FROM snapshots s \
+         WHERE s.parent_id IN (SELECT id FROM snapshots WHERE sandbox_id = ?)",
     )
     .bind(sandbox_id)
     .fetch_one(&state.db)
@@ -184,8 +191,9 @@ async fn deletion_blocked(state: &AppState, sandbox_id: &str) -> Option<String> 
     .ok()?;
     if row.0 > 0 {
         Some(format!(
-            "{} snapshot(s) still depend on this sandbox",
-            row.0
+            "{count} dependent snapshot(s) are built on this sandbox's snapshots; \
+             a snapshot with dependent incrementals cannot be deleted",
+            count = row.0
         ))
     } else {
         None

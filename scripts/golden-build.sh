@@ -42,9 +42,11 @@ usage: golden-build.sh [options]
   --vmid N                   vmid for the golden image. Default: reuse the
                              tagged golden for this tier, else scan for a free
                              vmid outside the test range (9000-9099).
-  --agent-bin PATH           bake the ori agent binary into the image
-                             (default: $ORI_PVE_AGENT_BIN, else
-                             <repo>/target/release/ori-agent)
+  --agent-bin PATH           bake the ori agent binary into the image. This is
+                             the single `ori` binary (the agent is a role, run
+                             as `ori agent`). Default: $ORI_PVE_AGENT_BIN, else
+                             the freshest x86_64-unknown-linux-musl `ori` built
+                             by scripts/build-all.sh (target/cross-*).
   --rootfs-size GB           rootfs size (default: 16 ubuntu / 8 alpine)
   --memory MB                container memory  (default 2048)
   --swap MB                  container swap    (default 512)
@@ -85,15 +87,54 @@ esac
 GOLDEN_TAG="ori-golden"
 GOLDEN_DESC_PREFIX="ori golden image"
 
-if [ -z "$AGENT_BIN" ] && [ -n "${ORI_PVE_AGENT_BIN:-}" ]; then
-  AGENT_BIN="$ORI_PVE_AGENT_BIN"
-fi
-if [ -z "$AGENT_BIN" ] && [ -f "$ORI_REPO_ROOT/target/release/ori-agent" ]; then
-  AGENT_BIN="$ORI_REPO_ROOT/target/release/ori-agent"
-fi
-if [ -n "$AGENT_BIN" ] && [ ! -f "$AGENT_BIN" ]; then
-  echo "error: agent binary not found: $AGENT_BIN" >&2
-  exit 2
+# The agent is a role of the single `ori` binary — not a separate artifact.
+# Default to the freshest cross-built x86_64 musl binary (what build-all.sh
+# produces), falling back to $ORI_PVE_AGENT_BIN / an explicit --agent-bin.
+resolve_agent_bin() {
+  local best="" cand
+  if [ -n "$AGENT_BIN" ]; then
+    if [ -f "$AGENT_BIN" ]; then
+      printf '%s' "$AGENT_BIN"
+    else
+      printf 'MISSING:%s' "$AGENT_BIN"
+    fi
+    return
+  fi
+  if [ -n "${ORI_PVE_AGENT_BIN:-}" ] && [ -f "$ORI_PVE_AGENT_BIN" ]; then
+    printf '%s' "$ORI_PVE_AGENT_BIN"
+    return
+  fi
+  for cand in \
+    "$ORI_REPO_ROOT/target/cross-x86/x86_64-unknown-linux-musl/release/ori" \
+    "$ORI_REPO_ROOT/target/cross-x86_64/x86_64-unknown-linux-musl/release/ori" \
+    "$ORI_REPO_ROOT/target/x86_64-unknown-linux-musl/release/ori"; do
+    [ -f "$cand" ] || continue
+    # freshest wins
+    if [ -z "$best" ] || [ "$cand" -nt "$best" ]; then
+      best="$cand"
+    fi
+  done
+  printf '%s' "$best"
+}
+AGENT_BIN="$(resolve_agent_bin)"
+case "$AGENT_BIN" in
+  MISSING:*)
+    echo "error: agent binary not found: ${AGENT_BIN#MISSING:}" >&2
+    exit 2 ;;
+esac
+
+# The golden is amd64; a wrong-arch binary fails only inside the container at
+# exec, which is the silent failure this card exists to kill. Check up front.
+if [ -n "$AGENT_BIN" ]; then
+  AGENT_BIN_KIND="$(file -b "$AGENT_BIN" 2>/dev/null || true)"
+  case "$AGENT_BIN_KIND" in
+    *x86-64*static*) echo "agent binary: $AGENT_BIN ($AGENT_BIN_KIND)" ;;
+    *x86-64*)
+      echo "WARN: agent binary is x86-64 but not statically linked: $AGENT_BIN_KIND" >&2 ;;
+    *)
+      echo "error: agent binary is not an x86-64 Linux ELF: $AGENT_BIN_KIND" >&2
+      exit 2 ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -272,12 +313,19 @@ pve_ssh "rm -rf $PROV_DIR && mkdir -p $PROV_DIR"
 
 AGENT_FLAG=0
 if [ -n "$AGENT_BIN" ]; then
-  pve_ssh "cat > $PROV_DIR/ori-agent" < "$AGENT_BIN"
-  pve_ssh "pct push $VMID $PROV_DIR/ori-agent /tmp/ori-agent && chmod 0755 $PROV_DIR/ori-agent"
+  # C25: the agent is a role of the single `ori` binary. It is pushed as
+  # /tmp/ori and installed as /usr/local/bin/ori; the autostart supervisor
+  # (image/ori-agent, which owns the wait-for-config / restart / log contract)
+  # is pushed as /tmp/ori-agent.
+  pve_ssh "cat > $PROV_DIR/ori" < "$AGENT_BIN"
+  pve_ssh "pct push $VMID $PROV_DIR/ori /tmp/ori"
+  pve_ssh "cat > $PROV_DIR/ori-agent" < "$ORI_SCRIPT_DIR/../image/ori-agent"
+  pve_ssh "pct push $VMID $PROV_DIR/ori-agent /tmp/ori-agent"
   AGENT_FLAG=1
 else
-  echo "WARN: no ori agent binary provided (use --agent-bin or ORI_PVE_AGENT_BIN);" >&2
-  echo "      golden built without the agent -- the pool claim path must inject it" >&2
+  echo "error: no ori agent binary found (run scripts/build-all.sh --target x86_64-unknown-linux-musl, or pass --agent-bin)." >&2
+  echo "       a golden without the agent silently falls back to the slow exec path; that is not a deliverable." >&2
+  exit 1
 fi
 
 # Desktop stack: the supervisor + the WebSocket-handshake probe come from
@@ -457,16 +505,29 @@ fi
 
 echo "== ori agent"
 if [ "$ORI_AGENT" = "1" ]; then
-  install -m 0755 /tmp/ori-agent /usr/local/bin/ori-agent
+  # image size before/after the agent -- the delta is what every pooled clone
+  # carries (see image/README.md). The agent is ~14 MB, but say so rather than
+  # leaving the cost unknown.
+  du -xsk / | cut -f1 > /tmp/ori-agent-size-before
+
+  install -m 0755 /tmp/ori /usr/local/bin/ori
   mkdir -p /etc/ori
+
+  # C25 autostart supervisor (pushed from the repo as /tmp/ori-agent): waits
+  # for /etc/ori/agent.json (a pool member is cloned before it is claimed), so
+  # the config arriving after boot does not fail the unit; restarts the agent
+  # on exit; logs to /var/log/ori-agent/agent.log.
+  install -m 0755 /tmp/ori-agent /usr/local/sbin/ori-agent
+
   if [ "$ORI_TIER" = "ubuntu" ]; then
     cat > /etc/systemd/system/ori-agent.service <<'UNIT'
 [Unit]
-Description=ori guest agent
+Description=ori guest agent (tunnel to control plane)
 After=network-online.target
 Wants=network-online.target
 [Service]
-ExecStart=/bin/sh -c 'test -f /etc/ori/agent.conf && exec /usr/local/bin/ori-agent --config /etc/ori/agent.conf'
+Type=simple
+ExecStart=/usr/local/sbin/ori-agent
 Restart=always
 RestartSec=5
 [Install]
@@ -476,13 +537,40 @@ UNIT
   else
     cat > /etc/init.d/ori-agent <<'INIT'
 #!/sbin/openrc-run
-command="/usr/local/bin/ori-agent"
-command_args="--config /etc/ori/agent.conf"
+name="ori-agent"
+description="ori guest agent (tunnel to control plane)"
+command="/usr/local/sbin/ori-agent"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
 depend() { need net; }
 INIT
     chmod 0755 /etc/init.d/ori-agent
     rc-update add ori-agent default >/dev/null 2>&1 || true
   fi
+
+  # start it now; a pooled clone starts it at boot via the unit instead. With
+  # no agent.json yet it must sit *waiting*, not fail.
+  if [ "$ORI_TIER" = "ubuntu" ]; then
+    systemctl start ori-agent >/dev/null 2>&1 || true
+  else
+    rc-service ori-agent start >/dev/null 2>&1 || true
+  fi
+
+  # fail-fast: the supervisor is up and its log exists (an empty agent log
+  # cost real debugging time earlier).
+  agok=0
+  for _i in $(seq 1 20); do
+    if [ "$ORI_TIER" = "ubuntu" ]; then
+      systemctl is-active --quiet ori-agent && { agok=1; break; }
+    else
+      pgrep -f /usr/local/sbin/ori-agent >/dev/null 2>&1 && { agok=1; break; }
+    fi
+    sleep 1
+  done
+  [ "$agok" = 1 ] || { echo "ERROR: ori-agent supervisor not running" >&2; exit 1; }
+  [ -f /var/log/ori-agent/agent.log ] || { echo "ERROR: agent log missing at /var/log/ori-agent/agent.log" >&2; exit 1; }
+
+  du -xsk / | cut -f1 > /tmp/ori-agent-size-after
 fi
 
 echo "== sshd running now (loopback binding verified at boot too)"
@@ -498,7 +586,8 @@ command -v git  >/dev/null || { echo "ERROR: git missing"  >&2; exit 1; }
 command -v docker >/dev/null || { echo "ERROR: docker missing" >&2; exit 1; }
 id work >/dev/null || { echo "ERROR: work user missing" >&2; exit 1; }
 if [ "$ORI_AGENT" = "1" ]; then
-  [ -x /usr/local/bin/ori-agent ] || { echo "ERROR: ori-agent missing" >&2; exit 1; }
+  [ -x /usr/local/bin/ori ] || { echo "ERROR: ori binary missing" >&2; exit 1; }
+  [ -x /usr/local/sbin/ori-agent ] || { echo "ERROR: ori-agent supervisor missing" >&2; exit 1; }
 fi
 if [ "$ORI_DESKTOP" = "1" ]; then
   command -v Xvfb      >/dev/null || { echo "ERROR: Xvfb missing" >&2; exit 1; }
@@ -506,11 +595,15 @@ if [ "$ORI_DESKTOP" = "1" ]; then
   command -v websockify >/dev/null || { echo "ERROR: websockify missing" >&2; exit 1; }
   [ -x /usr/local/sbin/ori-desktop ] || { echo "ERROR: ori-desktop missing" >&2; exit 1; }
 fi
-rm -f /tmp/ori-provision.sh /tmp/ori-agent /tmp/ori-desktop /tmp/wscheck.py
+rm -f /tmp/ori-provision.sh /tmp/ori /tmp/ori-agent /tmp/ori-desktop /tmp/wscheck.py
 echo "provision ok"
 if [ "$ORI_DESKTOP" = "1" ]; then
   b=$(cat /tmp/ori-size-before); a=$(cat /tmp/ori-size-after)
   echo "desktop rootfs: before=${b}KiB after=${a}KiB delta=$((a - b))KiB"
+fi
+if [ "$ORI_AGENT" = "1" ]; then
+  b=$(cat /tmp/ori-agent-size-before); a=$(cat /tmp/ori-agent-size-after)
+  echo "agent rootfs: before=${b}KiB after=${a}KiB delta=$((a - b))KiB"
 fi
 REMOTE
 
@@ -523,6 +616,10 @@ printf '%s\n' "$PROV_OUT"
 DESKTOP_SIZE=""
 if [ "$DESKTOP" = "1" ]; then
   DESKTOP_SIZE=$(printf '%s\n' "$PROV_OUT" | grep -oE 'desktop rootfs: .*' | tail -1)
+fi
+AGENT_SIZE=""
+if [ "$AGENT_FLAG" = "1" ]; then
+  AGENT_SIZE=$(printf '%s\n' "$PROV_OUT" | grep -oE 'agent rootfs: .*' | tail -1)
 fi
 mark "provision"
 
@@ -562,8 +659,9 @@ echo "  tier        = $TIER"
 echo "  template    = $TEMPLATE_VOLID"
 echo "  state       = stopped"
 echo "  rootfs      = ${ORI_STORAGE}:${ROOTFS_GB}"
-echo "  agent       = $([ "$AGENT_FLAG" = 1 ] && echo baked-in || echo "not baked (see WARN above)")"
+echo "  agent       = $([ "$AGENT_FLAG" = 1 ] && echo "baked-in ($(basename "$AGENT_BIN"))" || echo "not baked (see WARN above)")"
 echo "  desktop     = $([ "$DESKTOP" = 1 ] && echo installed || echo skipped)"
+[ -n "$AGENT_SIZE" ] && echo "  agent size  = $AGENT_SIZE"
 [ -n "$DESKTOP_SIZE" ] && echo "  desktop size= $DESKTOP_SIZE"
 echo
 echo "timings (wall clock):"

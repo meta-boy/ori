@@ -2,7 +2,7 @@
 //!
 //! Every error renders as `{"error":{"code":...,"message":...}}`. Codes:
 //! `not_found`, `conflict`, `invalid_transition`, `unauthorized`,
-//! `quota_exceeded`, `rate_limited`, `provider_unavailable`,
+//! `capacity_exceeded`, `rate_limited`, `provider_unavailable`,
 //! `invalid_request`, `not_implemented`.
 
 use axum::http::StatusCode;
@@ -70,10 +70,12 @@ impl ApiError {
         }
     }
 
-    pub fn quota_exceeded(msg: impl Into<String>) -> Self {
+    /// The host cannot take another sandbox — thin-pool headroom or free
+    /// memory is short. The message names which resource.
+    pub fn capacity_exceeded(msg: impl Into<String>) -> Self {
         ApiError {
-            status: StatusCode::TOO_MANY_REQUESTS,
-            code: "quota_exceeded",
+            status: StatusCode::CONFLICT,
+            code: "capacity_exceeded",
             message: msg.into(),
         }
     }

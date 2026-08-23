@@ -1,4 +1,4 @@
-//! Account identity, limits, teams, and API keys.
+//! Account identity, teams, and API keys.
 
 use axum::extract::{Extension, Path, State};
 use axum::Json;
@@ -6,18 +6,11 @@ use axum::Json;
 use crate::auth::{self, ApiKeyAuth};
 use crate::error::{ApiError, ApiResult};
 use crate::proto::{
-    Account, ApiKey, ApiKeyCreated, ApiKeyList, CreateApiKeyRequest, Limits, Team, TeamList,
+    Account, ApiKey, ApiKeyCreated, ApiKeyList, ApiKeyRotated, CreateApiKeyRequest, Team, TeamList,
     TypedId,
 };
-use crate::repo;
 use crate::state::AppState;
 use crate::util::now_ts;
-
-const PLAN: &str = "free";
-const MAX_RUNNING_SANDBOXES: i64 = 5;
-const MAX_TOTAL_SANDBOXES: i64 = 20;
-const MAX_STORAGE_GB: i64 = 50;
-const RATE_LIMIT_PER_MINUTE: i64 = 120;
 
 pub async fn me(
     State(_state): State<AppState>,
@@ -26,24 +19,7 @@ pub async fn me(
     Ok(Json(Account {
         identifier: auth.0.account_id,
         login_state: "active".into(),
-        plan: PLAN.into(),
         status: "active".into(),
-    }))
-}
-
-pub async fn limits(
-    State(state): State<AppState>,
-    auth: Extension<ApiKeyAuth>,
-) -> ApiResult<Json<Limits>> {
-    let (running, total) = repo::counts(&state.db, &auth.account_id).await?;
-    Ok(Json(Limits {
-        plan: PLAN.into(),
-        max_running_sandboxes: MAX_RUNNING_SANDBOXES,
-        max_total_sandboxes: MAX_TOTAL_SANDBOXES,
-        max_storage_gb: MAX_STORAGE_GB,
-        current_running: running,
-        current_total: total,
-        rate_limit_per_minute: RATE_LIMIT_PER_MINUTE,
     }))
 }
 
@@ -165,4 +141,61 @@ pub async fn revoke_api_key(
         return Err(ApiError::not_found(format!("api key {id}")));
     }
     Ok(Json(serde_json::json!({})))
+}
+
+/// `POST /api-keys/{id}/rotate`: revoke the old key and mint a fresh one that
+/// carries its name over. The new secret is shown exactly once, like `create`.
+/// `current` tells the caller whether the rotated key was the one that made
+/// this request — when true, its stored token is dead and must be replaced.
+pub async fn rotate_api_key(
+    State(state): State<AppState>,
+    auth: Extension<ApiKeyAuth>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ApiKeyRotated>> {
+    let name: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM api_keys WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
+    )
+    .bind(&id)
+    .bind(&auth.account_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found(format!("api key {id}")))?;
+
+    let now = now_ts();
+    sqlx::query("UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+
+    let new_id = TypedId::api_key().to_string();
+    let secret = TypedId::api_key_secret().to_string();
+    let prefix = secret.chars().take(6).collect::<String>();
+    let last_four = secret.chars().skip(secret.len() - 4).collect::<String>();
+    let hash = auth::hash_secret(&secret)?;
+    sqlx::query(
+        "INSERT INTO api_keys (id, account_id, name, prefix, last_four, key_hash, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&new_id)
+    .bind(&auth.account_id)
+    .bind(&name)
+    .bind(&prefix)
+    .bind(&last_four)
+    .bind(&hash)
+    .bind(&now)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(ApiKeyRotated {
+        api_key: ApiKeyCreated {
+            id: new_id,
+            name,
+            prefix,
+            last_four,
+            secret,
+            created_at: now,
+        },
+        current: auth.key_id == id,
+    }))
 }

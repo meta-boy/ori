@@ -1,0 +1,56 @@
+#!/bin/sh
+# ori agent autostart — wait for the claim-time config, then keep `ori agent`
+# running. This is the C25 "the agent must start by itself" supervisor, baked
+# into every golden image at /usr/local/sbin/ori-agent.
+#
+# Why the wait: a pool member is cloned *before* it is claimed, so
+# /etc/ori/agent.json does not exist at boot. The control plane writes it at
+# claim time (docs/DIVERGENCES.md "agent.json injection is still open"). We wait
+# for it rather than failing, so a pooled clone boots to a live supervisor and
+# becomes tunnel-ready the moment the config lands — with no provisioning step.
+#
+# Why the restart loop: the agent itself already reconnects forever with
+# jittered backoff, but it cannot survive its own process dying. This loop
+# restarts it; the init system (systemd Restart=always / openrc) is a second
+# layer for the supervisor itself.
+#
+# Why the log: an empty agent log has cost real debugging time. Everything lands
+# in /var/log/ori-agent/agent.log, created before anything runs, so a failure is
+# findable instead of a silent gap.
+#
+# The config carries a credential (controlPlaneUrl, token, sandboxId, workDir —
+# camelCase per crates/ori-agent/src/config.rs), so it is enforced 0600 and
+# root-owned here as well as by the agent on load.
+
+CONF=/etc/ori/agent.json
+BIN=/usr/local/bin/ori
+LOG_DIR=/var/log/ori-agent
+LOG="$LOG_DIR/agent.log"
+
+mkdir -p "$LOG_DIR"
+: > "$LOG"   # the log exists before anything runs, so it is always findable
+
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG"; }
+
+log "ori-agent supervisor: waiting for $CONF"
+i=0
+while [ ! -f "$CONF" ]; do
+  i=$((i + 1))
+  if [ $((i % 60)) -eq 0 ]; then
+    log "ori-agent supervisor: still waiting for $CONF (config arrives at claim time)"
+  fi
+  sleep 1
+done
+
+# The config carries a credential: 0600, root-owned (the agent re-chmods on
+# load, but do it here too so nothing below reads a world-readable token).
+chmod 0600 "$CONF" 2>/dev/null || true
+chown root:root "$CONF" 2>/dev/null || true
+
+log "ori-agent supervisor: config present; starting $BIN agent"
+while :; do
+  "$BIN" agent --config "$CONF" >>"$LOG" 2>&1
+  rc=$?
+  log "ori-agent supervisor: agent exited rc=$rc; restarting"
+  sleep 2
+done

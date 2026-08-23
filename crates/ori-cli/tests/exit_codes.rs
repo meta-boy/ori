@@ -41,7 +41,9 @@ fn usage_error_is_one() {
 #[test]
 fn unimplemented_is_one() {
     assert_eq!(exit_code(&["serve"]), 1);
-    assert_eq!(exit_code(&["extend", "ori_x", "--hours", "1"]), 1);
+    // a command still stubbed in this build (C16 wired extend/operation/api-key)
+    assert_eq!(exit_code(&["host", "ori_x", "3000"]), 1);
+    assert_eq!(exit_code(&["webhook", "list"]), 1);
 }
 
 #[test]

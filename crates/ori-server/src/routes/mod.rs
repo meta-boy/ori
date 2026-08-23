@@ -50,9 +50,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/sandboxes/:id/events", get(ai::events_sandbox))
         .route("/api/v1/operations/:id", get(operations::get_operation))
         .route("/api/v1/me", get(account::me))
-        .route("/api/v1/limits", get(account::limits))
         .route("/api/v1/teams", get(account::teams))
         .route("/api/v1/api-keys", get(account::list_api_keys))
+        .route("/api/v1/api-keys/:id/rotate", post(account::rotate_api_key))
         .route("/api/v1/api-keys/:id/revoke", post(account::revoke_api_key))
         .layer(middleware::from_fn_with_state(
             state.clone(),

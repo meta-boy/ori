@@ -371,21 +371,6 @@ pub async fn list_sandboxes(
     Ok((rows, has_more))
 }
 
-/// (current_running, current_total) for the account.
-pub async fn counts(db: &SqlitePool, account_id: &str) -> ApiResult<(i64, i64)> {
-    let row: (i64, i64) = sqlx::query_as(
-        "SELECT \
-         (SELECT count(*) FROM sandboxes WHERE account_id = ? AND deleted_at IS NULL AND \
-          state IN ('ready','running','idle','cloning','provisioning','init','provisioned')), \
-         (SELECT count(*) FROM sandboxes WHERE account_id = ? AND deleted_at IS NULL)",
-    )
-    .bind(account_id)
-    .bind(account_id)
-    .fetch_one(db)
-    .await?;
-    Ok(row)
-}
-
 /// Every non-deleted sandbox in a set of states.
 pub async fn sandboxes_in_states(db: &SqlitePool, states: &[&str]) -> ApiResult<Vec<SandboxRow>> {
     let placeholders = vec!["?"; states.len()].join(",");

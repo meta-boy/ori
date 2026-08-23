@@ -49,7 +49,6 @@ fn top_level_lists_every_subcommand() {
         "login",
         "logout",
         "status",
-        "limits",
         "api-key",
         "webhook",
         "team",
@@ -202,15 +201,18 @@ fn agent_and_roles_are_listed() {
 
 #[test]
 fn unimplemented_commands_fail_cleanly() {
+    // C16 wired `extend`, `operation`, `api-key` and removed `limits`; these
+    // are the commands still stubbed in this build.
     for args in [
-        vec!["extend", "ori_x", "--hours", "1"],
-        vec!["operation", "oriop_ab"],
         vec!["ssh", "ori_x"],
+        vec!["scp", "a:b", "c:d"],
+        vec!["forward", "ori_x", "--remote", "3000"],
         vec!["snapshots"],
         vec!["snapshot", "tree", "snap1"],
         vec!["env", "list"],
-        vec!["limits"],
-        vec!["api-key", "create"],
+        vec!["webhook", "list"],
+        vec!["team", "list"],
+        vec!["data-retention", "status"],
         vec!["prompt"],
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_ori"))

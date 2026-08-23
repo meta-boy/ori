@@ -18,16 +18,15 @@ use crate::ndjson::ndjson_response;
 use crate::pool::{ClaimResult, PoolKey};
 use crate::proto::{
     BoxState, Commands, CreateSandboxRequest, ExecRequest, ExecRequestBody, ExecResponse,
-    ExecResult, ExtendSandboxRequest, ForkSandboxRequest, InstanceHandle, InstanceSpec,
-    MachineType, PageInfo, ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, SnapshotRef,
-    StopMode, StopSandboxRequest, StreamEvent, TypedId,
+    ExecResult, ExtendResponse, ExtendSandboxRequest, ForkSandboxRequest, HostCapacity,
+    InstanceHandle, InstanceSpec, MachineType, PageInfo, ResumeSandboxRequest, Sandbox,
+    SandboxDetail, SandboxList, SnapshotRef, StopMode, StopSandboxRequest, StreamEvent, TypedId,
 };
 use crate::repo::{self, SandboxRow};
 use crate::slug;
 use crate::state::AppState;
 use crate::util::{after_seconds, default_name, now_ts};
 
-const MAX_TOTAL_SANDBOXES: i64 = 20;
 const FORK_DEFAULT_TTL_SECONDS: i64 = 3600;
 
 fn sandbox_url(domain: &str, slug: &str) -> String {
@@ -66,12 +65,11 @@ pub async fn create_sandbox(
         ));
     }
 
-    let (_, total) = repo::counts(&state.db, &auth.account_id).await?;
-    if total >= MAX_TOTAL_SANDBOXES {
-        return Err(ApiError::quota_exceeded(format!(
-            "plan allows at most {MAX_TOTAL_SANDBOXES} sandboxes; you have {total}"
-        )));
-    }
+    // Host capacity guard, not a per-account quota: `new` is refused when the
+    // host cannot take another sandbox (thin-pool headroom after the warm-pool
+    // footprint, and free memory) for the requested machine type. The check is
+    // synchronous so the refusal is a 409, not an error event on the stream.
+    guard_host_capacity(&state, machine_type).await?;
 
     let (tx, rx) = mpsc::unbounded_channel();
     let state2 = state.clone();
@@ -922,28 +920,42 @@ pub async fn extend_sandbox(
     auth: Extension<ApiKeyAuth>,
     Path(id): Path<String>,
     body: Option<Json<ExtendSandboxRequest>>,
-) -> ApiResult<Json<SandboxDetail>> {
+) -> ApiResult<Json<ExtendResponse>> {
     let row = fetch(&state, &id, &auth.account_id).await?;
     let req = body.map(|b| b.0).unwrap_or(ExtendSandboxRequest {
         hours: None,
         ttl_seconds: None,
         no_auto_stop: None,
     });
-    if req.no_auto_stop == Some(true) {
-        repo::set_stop_after(&state.db, &id, None).await?;
+    // The deadline is computed up front so a past deadline is refused before
+    // anything is written — `extend` can move the deadline later, never back.
+    let stop_after = if req.no_auto_stop == Some(true) {
+        None
     } else if let Some(h) = req.hours {
-        repo::set_stop_after(&state.db, &id, Some(&after_seconds(h.saturating_mul(3600)))).await?;
+        Some(deadline_after(&id, h.saturating_mul(3600))?)
     } else if let Some(t) = req.ttl_seconds {
-        repo::set_stop_after(&state.db, &id, Some(&after_seconds(t))).await?;
+        Some(deadline_after(&id, t)?)
     } else {
         return Err(ApiError::invalid_request(
             "one of hours, ttlSeconds, noAutoStop is required",
         ));
-    }
+    };
+    repo::set_stop_after(&state.db, &id, stop_after.as_deref()).await?;
     let fresh = repo::get_sandbox(&state.db, &id, &auth.account_id).await?;
-    Ok(Json(SandboxDetail {
+    Ok(Json(ExtendResponse {
         sandbox: fresh.unwrap_or(row).to_sandbox(),
+        stop_after,
     }))
+}
+
+/// The RFC3339 deadline `secs` from now, refusing a deadline in the past.
+fn deadline_after(id: &str, secs: i64) -> ApiResult<String> {
+    if secs <= 0 {
+        return Err(ApiError::invalid_request(format!(
+            "cannot extend {id}: {secs}s from now would put the auto-stop deadline in the past"
+        )));
+    }
+    Ok(after_seconds(secs))
 }
 
 // ---------------------------------------------------------------------------
@@ -1146,4 +1158,44 @@ async fn fetch(state: &AppState, id: &str, account_id: &str) -> ApiResult<Sandbo
     repo::get_sandbox(&state.db, id, account_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("sandbox {id}")))
+}
+
+/// Refuse `new` when the host cannot take another sandbox. Reuses the
+/// `scripts/preflight.sh` §6 arithmetic rather than inventing a second notion
+/// of "full": headroom is `storage_avail - pool_depth * slot_gb` (the warm
+/// pool's footprint), and free memory is checked against the machine type's
+/// RAM. Both must fit or the refusal names which resource is short.
+async fn guard_host_capacity(state: &AppState, machine_type: MachineType) -> ApiResult<()> {
+    let cap: HostCapacity = state.provider.capacity().await.map_err(|e| {
+        // Fail closed: unable to prove the host can take another sandbox is
+        // the same as unable to (the leaked-container incident is what this
+        // guard exists for).
+        ApiError::provider_unavailable(format!("cannot check host capacity: {e}"))
+    })?;
+    let slot_gb = state.config.pool_slot_gb as f64;
+    let pool_footprint = state.config.pool_depth as f64 * slot_gb;
+    let headroom_gb = cap.storage_avail_gb - pool_footprint;
+    let need_mem = machine_type.memory_gb() as f64;
+
+    let mut short: Vec<String> = Vec::new();
+    if headroom_gb < slot_gb {
+        short.push(format!(
+            "thin-pool storage: {headroom_gb:.1} GB headroom after the {}-slot warm-pool footprint, need {slot_gb:.0} GB for one sandbox",
+            state.config.pool_depth
+        ));
+    }
+    if cap.free_memory_gb < need_mem {
+        short.push(format!(
+            "memory: {:.1} GB free on the host, need {need_mem:.0} GB for a {} sandbox",
+            cap.free_memory_gb,
+            machine_type.as_str()
+        ));
+    }
+    if short.is_empty() {
+        return Ok(());
+    }
+    Err(ApiError::capacity_exceeded(format!(
+        "host cannot take another sandbox: {}",
+        short.join("; ")
+    )))
 }

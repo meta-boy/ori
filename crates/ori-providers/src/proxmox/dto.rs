@@ -81,3 +81,26 @@ pub struct VmConfig {
     pub memory: Option<u64>,
     pub hostname: Option<String>,
 }
+
+/// `GET /nodes/{node}/status` — node-level memory (bytes), used by the host
+/// capacity guard on `new`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NodeStatus {
+    #[serde(default)]
+    pub memory: NodeMemory,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NodeMemory {
+    pub total: u64,
+    #[serde(default)]
+    pub used: u64,
+}
+
+/// `GET /nodes/{node}/storage/{storage}/status` — thin-pool headroom (bytes),
+/// used by the host capacity guard on `new`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorageStatus {
+    #[serde(default)]
+    pub avail: u64,
+}
