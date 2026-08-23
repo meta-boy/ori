@@ -39,14 +39,18 @@ fn usage_error_is_one() {
 }
 
 #[test]
-fn unimplemented_is_one() {
-    assert_eq!(exit_code(&["serve"]), 1);
-    // Commands still stubbed in this build. `host` was moved off this list when
-    // it was implemented, and `webhook`/`team`/`data-retention`/`dashboard`/
-    // `self-update` when C22 wired them; keep it pointing at genuinely
-    // unimplemented ones so the test tracks reality rather than asserting a
-    // stub that no longer is.
-    assert_eq!(exit_code(&["desktop", "ori_x"]), 1);
+fn local_failure_is_one() {
+    // Earlier versions of this test named specific stubbed commands and went
+    // stale twice - first when `host` was implemented, then `desktop` - failing
+    // each time for the good reason that the feature now worked. A test that
+    // breaks on progress is testing the wrong thing, so the
+    // Unimplemented -> 1 mapping is asserted as a unit test in
+    // `error.rs` instead, and this covers a real process-level local failure.
+    assert_eq!(
+        exit_code(&["serve", "--db-path", "/nonexistent/dir/x.db"]),
+        1,
+        "an unusable local path is a usage-class failure, not an API error"
+    );
 }
 
 #[test]

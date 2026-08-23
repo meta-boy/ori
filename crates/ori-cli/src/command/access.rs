@@ -5,7 +5,7 @@ use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{ExecArgs, HostArgs};
+use crate::cli::{DesktopArgs, ExecArgs, HostArgs};
 use crate::context::Ctx;
 use crate::error::{ApiError, CliError};
 use crate::render::print_json;
@@ -136,6 +136,79 @@ pub async fn host(args: HostArgs, ctx: &Ctx) -> Result<(), CliError> {
         writeln!(
             out,
             "\nwarning: nothing is listening on port {} yet",
+            res.port
+        )?;
+    }
+    Ok(())
+}
+
+/// Port the golden image's `websockify` serves noVNC on, loopback-only.
+const DESKTOP_WEB_PORT: u16 = 6080;
+/// Raw VNC port, for a native client via `ori forward`.
+const DESKTOP_VNC_PORT: u16 = 5900;
+
+/// `ori desktop <id>` — a URL for the sandbox's graphical desktop.
+///
+/// The golden image already runs `Xvfb -> x11vnc -> websockify -> noVNC`, all
+/// bound to loopback, so this is the `host` mechanism pointed at that port
+/// rather than a separate transport: browser -> control plane -> agent tunnel ->
+/// loopback inside the sandbox.
+///
+/// `--vnc` exposes the raw VNC port instead, for a native client. That is a
+/// stream, not a web page, so it is reported as a `forward` target rather than
+/// dressed up as a URL a browser could open.
+pub async fn desktop(args: DesktopArgs, ctx: &Ctx) -> Result<(), CliError> {
+    let port = if args.vnc {
+        DESKTOP_VNC_PORT
+    } else {
+        DESKTOP_WEB_PORT
+    };
+    let res: HostPortResponse = ctx
+        .api
+        .post_json(
+            &format!("/sandboxes/{}/ports", args.id),
+            &HostPortRequest {
+                port,
+                public: args.public,
+                title: Some(if args.vnc {
+                    "vnc".into()
+                } else {
+                    "desktop".into()
+                }),
+            },
+        )
+        .await?;
+
+    if ctx.json {
+        print_json(&res)?;
+        return Ok(());
+    }
+
+    let mut out = io::stdout();
+    if args.vnc {
+        // A VNC client cannot speak to an HTTPS endpoint; give the command that
+        // actually gets them a local port instead of a misleading link.
+        writeln!(out, "vnc is on port {} inside the sandbox", res.port)?;
+        writeln!(
+            out,
+            "point a VNC client at 127.0.0.1:5900 after running:\n  ori forward {} --remote {}",
+            args.id, DESKTOP_VNC_PORT
+        )?;
+    } else {
+        writeln!(out, "{}/vnc.html", res.url.trim_end_matches('/'))?;
+        writeln!(
+            out,
+            "desktop on port {} - {}",
+            res.port,
+            if res.public { "public" } else { "token-gated" }
+        )?;
+    }
+    if let Some(note) = &res.note {
+        writeln!(out, "\nwarning: {note}")?;
+    } else if !res.listening {
+        writeln!(
+            out,
+            "\nwarning: nothing is listening on port {} - is the desktop stack running?",
             res.port
         )?;
     }

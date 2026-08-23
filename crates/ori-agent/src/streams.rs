@@ -218,7 +218,20 @@ struct RelayCtx {
 /// chunks are written to the socket. Ends cleanly on EOF, plane close, I/O
 /// error, or tunnel loss.
 async fn tcp_relay(id: StreamId, port: u16, mut rx: mpsc::Receiver<Vec<u8>>, ctx: RelayCtx) {
-    let tcp = match TcpStream::connect(("127.0.0.1", port)).await {
+    // Try IPv4 loopback, then IPv6. A dev server that binds `::1` (or listens
+    // IPv6-only, as busybox `nc -l` does) is otherwise unreachable through
+    // `ori forward` even though it is plainly listening -- a confusing failure
+    // that looks like a broken tunnel rather than an address-family mismatch.
+    let dialed = match TcpStream::connect(("127.0.0.1", port)).await {
+        Ok(t) => Ok(t),
+        Err(v4err) => match TcpStream::connect(("::1", port)).await {
+            Ok(t) => Ok(t),
+            // Report the IPv4 error: it is the address we document and the one
+            // a user is almost always expecting to have bound.
+            Err(_) => Err(v4err),
+        },
+    };
+    let tcp = match dialed {
         Ok(t) => t,
         Err(_) => {
             let _ = ctx

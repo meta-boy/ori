@@ -41,7 +41,7 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Scp(_) => Err(stub::unimplemented("scp")),
         Command::Forward(_) => Err(stub::unimplemented("forward")),
         Command::Host(a) => access::host(a, &ctx).await,
-        Command::Desktop(_) => Err(stub::unimplemented("desktop")),
+        Command::Desktop(a) => access::desktop(a, &ctx).await,
         Command::Snapshots(args) => snapshots::cmd(args, &ctx).await,
         Command::Snapshot(sub) => snapshots::snapshot(&sub, &ctx).await,
         Command::Env(sub) => env::cmd(&sub, &ctx).await,
