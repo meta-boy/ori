@@ -2062,17 +2062,29 @@ async fn webhook_delivers_ready_signed_and_off_the_request_path() {
     let t = test_app().await;
     let token = bootstrap_key(&t.app).await;
 
-    // a slow receiver: the delivery must not block the sandbox from reaching
-    // ready. It sleeps 800 ms before answering.
+    // A receiver that does not answer until this test says so. The gate is a
+    // semaphore rather than a sleep on purpose: the old version slept 800 ms
+    // and asserted create finished inside 500 ms, which is a 300 ms margin
+    // measured on a shared CI runner -- it failed at 507 ms and 512 ms.
+    //
+    // Held open, the gate turns the claim into a structural one instead of a
+    // timed one: if delivery were on the request path, create could not
+    // possibly return while the receiver is still blocked. Returning at all is
+    // the proof, and no clock is involved.
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let captured: std::sync::Arc<std::sync::Mutex<Vec<Received>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured2 = captured.clone();
+    let gate2 = gate.clone();
     let app = Router::new().route(
         "/hook",
         axum::routing::post(move |headers: axum::http::HeaderMap, body: String| {
             let captured = captured2.clone();
+            let gate = gate2.clone();
             async move {
-                tokio::time::sleep(Duration::from_millis(800)).await;
+                // Permits persist, so releasing before the handler arrives here
+                // is not a lost wakeup -- unlike `Notify::notify_waiters`.
+                let _permit = gate.acquire().await.expect("gate open");
                 captured.lock().unwrap().push(Received { headers, body });
                 StatusCode::OK
             }
@@ -2086,13 +2098,22 @@ async fn webhook_delivers_ready_signed_and_off_the_request_path() {
 
     let (_id, secret) = create_webhook(&t.app, &token, &format!("http://{addr}/hook")).await;
 
-    let started = Instant::now();
-    let (sandbox_id, _) = create_sandbox(&t.app, &token, json!({})).await;
-    let elapsed = started.elapsed();
+    // Generous outer bound only so a regression fails instead of hanging CI.
+    let (sandbox_id, _) = tokio::time::timeout(
+        Duration::from_secs(30),
+        create_sandbox(&t.app, &token, json!({})),
+    )
+    .await
+    .expect("a blocked webhook receiver must not hold up the sandbox reaching ready");
+
+    // Nothing can have been delivered yet: the receiver is still gated.
     assert!(
-        elapsed < Duration::from_millis(500),
-        "a slow receiver delayed the sandbox reaching ready ({elapsed:?})"
+        captured.lock().unwrap().is_empty(),
+        "delivery ran inline on the request path"
     );
+
+    // Let the receiver answer; the delivery must still arrive, and be signed.
+    gate.add_permits(1);
 
     // the delivery still arrives, signed, once the receiver finishes
     let received = wait_for_delivery(&captured, 1).await;
