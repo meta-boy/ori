@@ -1,9 +1,11 @@
-//! Access commands. `exec` is implemented; `ssh`/`scp`/`forward`/`host`/`desktop`
-//! tunnel through the control plane and are stubs in this build.
+//! Access commands. `exec` and `host` are implemented; `ssh`/`scp`/`forward`/
+//! `desktop` tunnel through the control plane and are stubs in this build.
 
 use std::io::{self, Write};
 
-use crate::cli::ExecArgs;
+use serde::{Deserialize, Serialize};
+
+use crate::cli::{ExecArgs, HostArgs};
 use crate::context::Ctx;
 use crate::error::{ApiError, CliError};
 use crate::render::print_json;
@@ -74,4 +76,68 @@ pub async fn exec(args: ExecArgs, ctx: &Ctx) -> Result<(), CliError> {
             message: "exec response missing exitCode".into(),
         })),
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostPortRequest {
+    port: u16,
+    public: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HostPortResponse {
+    port: u16,
+    url: String,
+    public: bool,
+    listening: bool,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// `ori host <id> <port>` — expose a sandbox port on a stable URL.
+pub async fn host(args: HostArgs, ctx: &Ctx) -> Result<(), CliError> {
+    if args.port == 0 {
+        return Err(CliError::usage("port must be non-zero"));
+    }
+    let res: HostPortResponse = ctx
+        .api
+        .post_json(
+            &format!("/sandboxes/{}/ports", args.id),
+            &HostPortRequest {
+                port: args.port,
+                public: args.public,
+                title: args.title.clone(),
+            },
+        )
+        .await?;
+
+    if ctx.json {
+        print_json(&res)?;
+        return Ok(());
+    }
+
+    let mut out = io::stdout();
+    writeln!(out, "{}", res.url)?;
+    writeln!(
+        out,
+        "port {} - {}",
+        res.port,
+        if res.public { "public" } else { "token-gated" }
+    )?;
+    // A URL for a port nothing is serving is the most common outcome of this
+    // command, so say what is wrong instead of leaving a dead link.
+    if let Some(note) = &res.note {
+        writeln!(out, "\nwarning: {note}")?;
+    } else if !res.listening {
+        writeln!(
+            out,
+            "\nwarning: nothing is listening on port {} yet",
+            res.port
+        )?;
+    }
+    Ok(())
 }

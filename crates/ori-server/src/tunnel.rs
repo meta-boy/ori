@@ -79,6 +79,14 @@ struct AgentConn {
     streams: StreamSinks,
 }
 
+/// What the agent reports about a port inside the sandbox.
+#[derive(Debug, Clone)]
+pub struct PortProbe {
+    pub listening: bool,
+    pub loopback_only: bool,
+    pub note: Option<String>,
+}
+
 /// One multiplexed byte stream to a sandbox.
 ///
 /// This is the single primitive behind `host`, `ssh`, `scp` and `forward`: the
@@ -226,6 +234,48 @@ impl AgentRegistry {
             tx: conn.tx.clone(),
             rx,
             streams: conn.streams.clone(),
+        })
+    }
+
+    /// Ask the agent what is on `port` inside the sandbox.
+    ///
+    /// Used before handing back a hosted URL: a service bound to `127.0.0.1` is
+    /// unreachable through the proxy, and that is the most common mistake with
+    /// this feature. Returning the diagnostic beats returning a dead link.
+    pub async fn probe_port(&self, sandbox_id: &str, port: u16) -> Option<PortProbe> {
+        let id = request_id();
+        let frame = json!({"type": "host", "id": id, "port": port});
+        let v = self.request(sandbox_id, &id, frame).await?;
+        let listening = v
+            .get("listening")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let loopback_only = v
+            .get("loopbackOnly")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let note = v
+            .get("note")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                if loopback_only {
+                    Some(format!(
+                        "the service on port {port} is bound to loopback and will not be \
+                         reachable through the URL; rebind it to 0.0.0.0"
+                    ))
+                } else if !listening {
+                    Some(format!(
+                        "nothing is listening on port {port} in the sandbox"
+                    ))
+                } else {
+                    None
+                }
+            });
+        Some(PortProbe {
+            listening,
+            loopback_only,
+            note,
         })
     }
 

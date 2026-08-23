@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> Router {
             post(sandboxes::extend_sandbox),
         )
         .route("/api/v1/sandboxes/:id/exec", post(sandboxes::exec_sandbox))
+        .route("/api/v1/sandboxes/:id/ports", post(crate::proxy::host_port))
         .route(
             "/api/v1/sandboxes/:id/exec/:pid",
             get(sandboxes::exec_status),
@@ -71,5 +72,9 @@ pub fn router(state: AppState) -> Router {
         // and checks the bearer token itself when one is present
         .route("/api/v1/api-keys", post(account::create_api_key))
         .merge(protected)
+        // Anything that is not an API path is a hosted-port request,
+        // resolved by the sandbox slug in the Host header. API routes are
+        // matched first, so this cannot shadow them.
+        .fallback(crate::proxy::proxy)
         .with_state(state)
 }

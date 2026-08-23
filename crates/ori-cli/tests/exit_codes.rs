@@ -41,8 +41,10 @@ fn usage_error_is_one() {
 #[test]
 fn unimplemented_is_one() {
     assert_eq!(exit_code(&["serve"]), 1);
-    // a command still stubbed in this build (C16 wired extend/operation/api-key)
-    assert_eq!(exit_code(&["host", "ori_x", "3000"]), 1);
+    // Commands still stubbed in this build. `host` was moved off this list when
+    // it was implemented; keep it pointing at genuinely unimplemented ones so
+    // the test tracks reality rather than asserting a stub that no longer is.
+    assert_eq!(exit_code(&["desktop", "ori_x"]), 1);
     assert_eq!(exit_code(&["webhook", "list"]), 1);
 }
 

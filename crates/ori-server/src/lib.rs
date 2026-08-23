@@ -12,6 +12,7 @@ pub mod ndjson;
 pub mod pool;
 pub mod proto;
 pub mod providers;
+pub mod proxy;
 pub mod repo;
 pub mod routes;
 pub mod slug;
