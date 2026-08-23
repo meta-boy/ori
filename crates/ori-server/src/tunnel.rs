@@ -234,6 +234,28 @@ impl AgentRegistry {
     /// `None` means no live tunnel — the caller should report that plainly
     /// rather than handing back a URL or a socket that cannot work.
     pub async fn open_tcp(&self, sandbox_id: &str, port: u16) -> Option<TunnelStream> {
+        self.open_stream(sandbox_id, json!({"type": "tcp", "port": port}))
+            .await
+    }
+
+    /// Open a File stream over the tunnel: read the path (relative to the
+    /// sandbox work dir) as a raw file, or as a tar when it is a directory.
+    /// `pull`/`tree` reuse this rather than buffering a snapshot in memory.
+    ///
+    /// `None` means no live tunnel — the caller should report that plainly.
+    pub async fn open_file(&self, sandbox_id: &str, path: &str) -> Option<TunnelStream> {
+        self.open_stream(
+            sandbox_id,
+            json!({"type": "file", "path": path, "mode": "read"}),
+        )
+        .await
+    }
+
+    /// Shared stream-open path: pick a stream id, register the inbound sink,
+    /// and tell the agent to open the stream. `kind` is the agent's `StreamKind`
+    /// wire shape; the agent validates it (traversal rejection for files) and
+    /// answers with data frames plus a terminal `streamClose`.
+    async fn open_stream(&self, sandbox_id: &str, kind: Value) -> Option<TunnelStream> {
         let conn = { self.inner.read().await.get(sandbox_id).cloned() }?;
         // Stream ids are chosen by the control plane, per the agent contract.
         let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed) + 1;
@@ -245,7 +267,7 @@ impl AgentRegistry {
             .send(json!({
                 "type": "streamOpen",
                 "id": id,
-                "kind": {"type": "tcp", "port": port},
+                "kind": kind,
             }))
             .await
             .is_ok();

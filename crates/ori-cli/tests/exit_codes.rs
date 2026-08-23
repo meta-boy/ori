@@ -42,10 +42,11 @@ fn usage_error_is_one() {
 fn unimplemented_is_one() {
     assert_eq!(exit_code(&["serve"]), 1);
     // Commands still stubbed in this build. `host` was moved off this list when
-    // it was implemented; keep it pointing at genuinely unimplemented ones so
-    // the test tracks reality rather than asserting a stub that no longer is.
+    // it was implemented, and `webhook`/`team`/`data-retention`/`dashboard`/
+    // `self-update` when C22 wired them; keep it pointing at genuinely
+    // unimplemented ones so the test tracks reality rather than asserting a
+    // stub that no longer is.
     assert_eq!(exit_code(&["desktop", "ori_x"]), 1);
-    assert_eq!(exit_code(&["webhook", "list"]), 1);
 }
 
 #[test]

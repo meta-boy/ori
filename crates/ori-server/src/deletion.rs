@@ -145,6 +145,8 @@ async fn run_deletion(state: AppState, op_id: String) {
     match state.provider.destroy(&handle).await {
         Ok(()) => {
             let _ = complete_op(&state, &op_id, None).await;
+            // the sandbox is gone: that is the lifecycle's `archived` event
+            crate::routes::webhook::emit(&state, &op.sandbox_id, "archived").await;
         }
         Err(e) => {
             // keep the op non-terminal so the operator can retry; record why

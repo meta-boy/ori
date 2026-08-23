@@ -6,9 +6,10 @@ pub mod agent;
 pub mod completions;
 pub mod lifecycle;
 pub mod serve;
+pub mod snapshots;
 pub mod stub;
 
-use crate::cli::{Command, DebugCommand, EnvCommand, SnapshotCommand};
+use crate::cli::{Command, DebugCommand, EnvCommand};
 use crate::context::Ctx;
 use crate::error::CliError;
 
@@ -40,30 +41,18 @@ pub async fn dispatch(cmd: Command, mut ctx: Ctx) -> Result<(), CliError> {
         Command::Forward(_) => Err(stub::unimplemented("forward")),
         Command::Host(a) => access::host(a, &ctx).await,
         Command::Desktop(_) => Err(stub::unimplemented("desktop")),
-        Command::Snapshots(_) => Err(stub::unimplemented("snapshots")),
-        Command::Snapshot(sub) => snapshot_stub(&sub),
+        Command::Snapshots(args) => snapshots::cmd(args, &ctx).await,
+        Command::Snapshot(sub) => snapshots::snapshot(&sub, &ctx).await,
         Command::Env(sub) => env_stub(&sub),
-        Command::Webhook(_) => Err(stub::unimplemented("webhook")),
-        Command::Team(_) => Err(stub::unimplemented("team")),
-        Command::DataRetention(_) => Err(stub::unimplemented("data-retention")),
-        Command::Dashboard(_) => Err(stub::unimplemented("dashboard")),
-        Command::SelfUpdate(_) => Err(stub::unimplemented("self-update")),
+        Command::Webhook(sub) => account::webhook(sub, &mut ctx).await,
+        Command::Team(sub) => account::team(sub, &mut ctx).await,
+        Command::DataRetention(sub) => account::data_retention(sub, &ctx).await,
+        Command::Dashboard(a) => account::dashboard(a, &ctx).await,
+        Command::SelfUpdate(a) => account::self_update(a, &ctx).await,
         Command::Prompt(_) => Err(stub::unimplemented("prompt")),
         Command::Interrupt(_) => Err(stub::unimplemented("interrupt")),
         Command::Events(_) => Err(stub::unimplemented("events")),
     }
-}
-
-fn snapshot_stub(sub: &SnapshotCommand) -> Result<(), CliError> {
-    let name = match sub {
-        SnapshotCommand::Save { .. } => "snapshot save",
-        SnapshotCommand::Latest { .. } => "snapshot latest",
-        SnapshotCommand::Tree { .. } => "snapshot tree",
-        SnapshotCommand::Pull { .. } => "snapshot pull",
-        SnapshotCommand::Delete { .. } => "snapshot delete",
-        SnapshotCommand::Rm { .. } => "snapshot rm",
-    };
-    Err(stub::unimplemented(name))
 }
 
 fn env_stub(sub: &EnvCommand) -> Result<(), CliError> {

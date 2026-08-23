@@ -464,7 +464,10 @@ pub enum ApiKeyCommand {
 #[derive(Debug, Subcommand)]
 pub enum WebhookCommand {
     /// Create a lifecycle webhook (secret shown once)
-    Create,
+    Create {
+        /// Receiver URL (http(s)://)
+        url: String,
+    },
     /// List webhooks
     List,
     /// Rotate a webhook signing secret

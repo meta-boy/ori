@@ -5,7 +5,7 @@
 //! route (it checks the bearer token itself when one is present).
 
 use axum::middleware;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 
 use crate::auth;
@@ -13,9 +13,13 @@ use crate::state::AppState;
 
 mod account;
 mod ai;
+mod dashboard;
+pub(crate) mod data_retention;
 mod login;
 mod operations;
 mod sandboxes;
+mod snapshots;
+pub mod webhook;
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
@@ -61,6 +65,34 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/operations/:id", get(operations::get_operation))
         .route("/api/v1/me", get(account::me))
         .route("/api/v1/teams", get(account::teams))
+        .route(
+            "/api/v1/webhooks",
+            get(webhook::list_webhooks).post(webhook::create_webhook),
+        )
+        .route("/api/v1/webhooks/:id/rotate", post(webhook::rotate_webhook))
+        .route("/api/v1/webhooks/:id/remove", post(webhook::remove_webhook))
+        .route(
+            "/api/v1/account/data-retention",
+            get(data_retention::status).post(data_retention::enable),
+        )
+        .route(
+            "/api/v1/snapshots",
+            get(snapshots::list_snapshots).post(snapshots::save_snapshot),
+        )
+        .route(
+            "/api/v1/snapshots/:id",
+            get(snapshots::get_snapshot).delete(snapshots::delete_snapshot),
+        )
+        .route("/api/v1/snapshots/:id/tree", get(snapshots::snapshot_tree))
+        .route("/api/v1/snapshots/:id/pull", get(snapshots::pull_snapshot))
+        .route(
+            "/api/v1/named-snapshots",
+            get(snapshots::list_named_snapshots),
+        )
+        .route(
+            "/api/v1/named-snapshots/:name",
+            delete(snapshots::rm_named_snapshot),
+        )
         .route("/api/v1/api-keys", get(account::list_api_keys))
         .route("/api/v1/api-keys/:id/rotate", post(account::rotate_api_key))
         .route("/api/v1/api-keys/:id/revoke", post(account::revoke_api_key))
@@ -74,6 +106,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/cli/login/:id/approve", post(login::login_approve))
         .route("/api/v1/cli/login/poll/:id", get(login::login_poll))
         .route("/api/v1/cli/version", get(login::cli_version))
+        // the control-plane dashboard; unauthenticated like the login flow,
+        // and matched before the hosted-port fallback
+        .route("/dashboard", get(dashboard::page))
         // the agent tunnel authenticates with a per-sandbox token, not an
         // account key, so it sits outside the bearer middleware
         .route("/api/v1/agent/tunnel", get(crate::tunnel::agent_tunnel))

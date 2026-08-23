@@ -60,6 +60,13 @@ pub struct Config {
     /// (`ORI_POOL_HEADROOM_GB = storage_avail_gb - pool_depth * slot_gb`).
     /// `ORI_POOL_SLOT_GB` env, default 8 (matches the Proxmox `ROOTFS_SIZE_GB`).
     pub pool_slot_gb: u32,
+
+    /// Release base for `GET /cli/version` (self-update). Points at the
+    /// `latest.json` release contract (`install.sh` already implements it:
+    /// checksum verified before writing, refuses downgrades and channel
+    /// jumps). `None` means no channel is configured and self-update reports
+    /// "already up to date". `ORI_RELEASE_BASE_URL` env.
+    pub release_base_url: Option<String>,
 }
 
 impl Default for Config {
@@ -75,6 +82,7 @@ impl Default for Config {
             pool_depth: 0,
             pool_golden: None,
             pool_slot_gb: 8,
+            release_base_url: None,
         }
     }
 }
@@ -128,6 +136,11 @@ impl Config {
                 if n > 0 {
                     cfg.pool_slot_gb = n;
                 }
+            }
+        }
+        if let Ok(v) = std::env::var("ORI_RELEASE_BASE_URL") {
+            if !v.is_empty() {
+                cfg.release_base_url = Some(v);
             }
         }
         cfg

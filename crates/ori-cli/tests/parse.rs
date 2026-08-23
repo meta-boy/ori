@@ -3,7 +3,9 @@
 
 use clap::Parser;
 
-use ori_cli::cli::{Cli, Command, DebugCommand, EnvCommand, Shell, SnapshotCommand};
+use ori_cli::cli::{
+    Cli, Command, DebugCommand, EnvCommand, Shell, SnapshotCommand, WebhookCommand,
+};
 
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(["ori"].into_iter().chain(args.iter().copied())).unwrap()
@@ -298,6 +300,10 @@ fn api_key_and_team_subcommands() {
     assert!(matches!(
         parse(&["api-key", "create"]).command,
         Command::ApiKey(_)
+    ));
+    assert!(matches!(
+        parse(&["webhook", "create", "https://hooks.example.com/ori"]).command,
+        Command::Webhook(WebhookCommand::Create { url }) if url == "https://hooks.example.com/ori"
     ));
     assert!(matches!(
         parse(&["team", "switch", "t1"]).command,

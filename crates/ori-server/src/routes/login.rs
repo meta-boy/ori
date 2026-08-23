@@ -3,12 +3,11 @@
 
 use axum::extract::{Path, State};
 use axum::Json;
+use serde::Serialize;
 
 use crate::auth;
 use crate::error::{ApiError, ApiResult};
-use crate::proto::{
-    Account, CliVersion, LoginPollResponse, LoginStartRequest, LoginStartResponse, TypedId,
-};
+use crate::proto::{Account, LoginPollResponse, LoginStartRequest, LoginStartResponse, TypedId};
 use crate::state::AppState;
 use crate::util::{now_ts, parse_ts};
 
@@ -188,13 +187,114 @@ pub async fn login_poll(
     }
 }
 
-pub async fn cli_version(State(_state): State<AppState>) -> ApiResult<Json<CliVersion>> {
-    Ok(Json(CliVersion {
-        current: "0.1.0".into(),
-        latest: "0.1.0".into(),
-        channel: "stable".into(),
-        update_available: false,
+/// `GET /cli/version` — the self-update channel check. This is the same
+/// contract `latest.json` uses (docs/SPEC-API.md, install.sh): a release base
+/// URL configured on the control plane, whose `latest.json` declares the
+/// newest `version`/`channel` for the channel. The CLI compares against its own
+/// version and, when an update is available, reuses `install.sh` (checksum
+/// verified, refuses downgrades and channel jumps) rather than writing a second
+/// updater.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliVersionResponse {
+    pub current: String,
+    pub latest: String,
+    pub channel: String,
+    pub update_available: bool,
+    /// Where the CLI should fetch `install.sh`/`latest.json` to self-update.
+    /// `None` when the control plane has no release channel configured.
+    pub release_base_url: Option<String>,
+}
+
+pub async fn cli_version(State(state): State<AppState>) -> ApiResult<Json<CliVersionResponse>> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let Some(base) = state.config.release_base_url.clone() else {
+        // No release channel: nothing to update to. Reporting current as
+        // latest keeps the CLI's "already up to date" honest.
+        return Ok(Json(CliVersionResponse {
+            current: current.clone(),
+            latest: current,
+            channel: "stable".into(),
+            update_available: false,
+            release_base_url: None,
+        }));
+    };
+
+    let (latest, channel) = match fetch_latest_json(&base).await {
+        Some((v, c)) => (v, c.unwrap_or_else(|| "stable".into())),
+        None => {
+            // release base configured but unreachable/invalid: do not report a
+            // phantom update — the CLI must not chase a version we cannot
+            // verify exists
+            tracing::warn!(base = %base, "could not fetch latest.json for self-update");
+            return Ok(Json(CliVersionResponse {
+                current: current.clone(),
+                latest: current,
+                channel: "stable".into(),
+                update_available: false,
+                release_base_url: Some(base),
+            }));
+        }
+    };
+    let update_available = version_gt(&latest, &current);
+    Ok(Json(CliVersionResponse {
+        current,
+        latest,
+        channel,
+        update_available,
+        release_base_url: Some(base),
     }))
+}
+
+/// Read `{base}/latest.json` (`{ "version": "…", "channel": "…", "platforms":
+/// {…} }`). `base` may be an http(s) URL or a local directory, mirroring
+/// install.sh's release-base handling.
+async fn fetch_latest_json(base: &str) -> Option<(String, Option<String>)> {
+    let base = base.trim_end_matches('/');
+    let raw = if base.starts_with("http://") || base.starts_with("https://") {
+        reqwest::get(format!("{base}/latest.json"))
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .text()
+            .await
+            .ok()?
+    } else {
+        std::fs::read_to_string(std::path::Path::new(base).join("latest.json")).ok()?
+    };
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let version = v.get("version")?.as_str()?.to_string();
+    let channel = v
+        .get("channel")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    Some((version, channel))
+}
+
+/// Dot-separated numeric version comparison (same semantics as install.sh's
+/// `ver_cmp`). Returns true when `a > b`.
+fn version_gt(a: &str, b: &str) -> bool {
+    let num = |s: &str| {
+        s.split('.')
+            .map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+            })
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<u64>>()
+    };
+    let (aa, bb) = (num(a), num(b));
+    let n = aa.len().max(bb.len());
+    for i in 0..n {
+        let x = aa.get(i).copied().unwrap_or(0);
+        let y = bb.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
 }
 
 fn random_user_code() -> String {

@@ -275,6 +275,89 @@ pub struct ApiKeyRotated {
     pub current: bool,
 }
 
+// ---------------------------------------------------------------------------
+// webhooks
+// ---------------------------------------------------------------------------
+
+/// `GET /webhooks` — prefix + last four only; the signing secret is never
+/// returned again after creation/rotation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookListResponse {
+    pub webhooks: Vec<Webhook>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Webhook {
+    pub id: String,
+    pub url: String,
+    pub events: String,
+    pub prefix: String,
+    pub last_four: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub state: String,
+}
+
+/// `POST /webhooks` — the signing secret is present exactly once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookCreated {
+    pub id: String,
+    pub url: String,
+    pub events: String,
+    pub prefix: String,
+    pub last_four: String,
+    pub secret: String,
+    pub created_at: String,
+}
+
+/// `POST /webhooks/{id}/rotate` — a fresh signing secret (shown once).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookRotated {
+    pub webhook: WebhookCreated,
+}
+
+// ---------------------------------------------------------------------------
+// teams / data retention / self-update
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamListResponse {
+    pub teams: Vec<Team>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub scope: String,
+    pub role: String,
+}
+
+/// `GET /account/data-retention`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRetentionStatus {
+    pub enabled: bool,
+}
+
+/// `GET /cli/version` — the self-update channel check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliVersionResponse {
+    pub current: String,
+    pub latest: String,
+    pub channel: String,
+    pub update_available: bool,
+    #[serde(default)]
+    pub release_base_url: Option<String>,
+}
+
 /// NDJSON lifecycle events for `new` / `resume` / `fork`. Serialises to the
 /// exact lines quoted in `docs/SPEC-API.md`.
 #[derive(Debug, Clone, Deserialize)]

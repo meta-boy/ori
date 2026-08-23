@@ -130,6 +130,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let app = routes::router(state.clone());
     tasks::spawn_reaper(state.clone());
     tasks::spawn_reconciler(state.clone());
+    routes::webhook::spawn_sweeper(state.clone());
     if let Some(pool) = &state.pool {
         pool.spawn_refill();
     }

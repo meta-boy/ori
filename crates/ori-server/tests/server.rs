@@ -1818,3 +1818,570 @@ fn extract_secret_from_response(resp: &str) -> String {
     let v: Value = serde_json::from_str(body).expect("bootstrap response JSON");
     v["secret"].as_str().unwrap().to_string()
 }
+
+// ---------------------------------------------------------------------------
+// webhooks: CRUD, HMAC-signed delivery, bounded retries
+// ---------------------------------------------------------------------------
+
+/// `POST /webhooks` and return (id, secret).
+async fn create_webhook(app: &Router, token: &str, url: &str) -> (String, String) {
+    let (status, v) = call_json(
+        app,
+        req(
+            Method::POST,
+            "/api/v1/webhooks",
+            Some(token),
+            Some(json!({ "url": url })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "webhook create: {v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let secret = v["secret"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("ori_ws_"), "secret prefix: {secret}");
+    assert_eq!(v["events"], "ready,error,archived");
+    (id, secret)
+}
+
+/// A local HTTP receiver that captures every webhook delivery (headers +
+/// body) so tests can verify the signature and payload. Responds 200.
+async fn spawn_receiver() -> (
+    std::net::SocketAddr,
+    std::sync::Arc<std::sync::Mutex<Vec<Received>>>,
+) {
+    use axum::routing::post;
+
+    let captured: std::sync::Arc<std::sync::Mutex<Vec<Received>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = Router::new().route(
+        "/hook",
+        post({
+            let captured = captured.clone();
+            move |headers: axum::http::HeaderMap, body: String| {
+                let captured = captured.clone();
+                async move {
+                    captured.lock().unwrap().push(Received { headers, body });
+                    StatusCode::OK
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, captured)
+}
+
+#[derive(Clone)]
+struct Received {
+    headers: axum::http::HeaderMap,
+    body: String,
+}
+
+impl Received {
+    fn header(&self, name: &str) -> Option<String> {
+        self.headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+    }
+}
+
+/// Recompute `sha256=HMAC(secret, "{timestamp}.{body}")` and compare against
+/// the delivered `X-Ori-Signature` header — the receiver's side of the handshake.
+fn signature_verifies(secret: &str, ts: &str, body: &str, sig_header: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(format!("{ts}.{body}").as_bytes());
+    let expected = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    sig_header == expected
+}
+
+async fn wait_for_delivery(
+    captured: &std::sync::Arc<std::sync::Mutex<Vec<Received>>>,
+    expected: usize,
+) -> Vec<Received> {
+    for _ in 0..100 {
+        let n = captured.lock().unwrap().len();
+        if n >= expected {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    captured.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn webhook_crud_and_secret_shown_once() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+
+    // empty list
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/webhooks", Some(&token), None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["webhooks"].as_array().unwrap().len(), 0);
+
+    let (id, secret) = create_webhook(&t.app, &token, "https://hooks.example.com/ori").await;
+    // a second webhook must not be the same secret
+    let (_id2, secret2) = create_webhook(&t.app, &token, "https://hooks.example.com/other").await;
+    assert_ne!(secret, secret2);
+
+    // list exposes prefix + last four, never the secret
+    let (status, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/webhooks", Some(&token), None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let webhooks = v["webhooks"].as_array().unwrap();
+    assert_eq!(webhooks.len(), 2);
+    let first = webhooks.iter().find(|w| w["id"] == id).unwrap();
+    assert_eq!(first["url"], "https://hooks.example.com/ori");
+    assert_eq!(first["prefix"].as_str().unwrap().len(), 6);
+    assert_eq!(first["lastFour"].as_str().unwrap().len(), 4);
+    assert!(
+        first.get("secret").is_none(),
+        "list must never expose the secret"
+    );
+
+    // rotate: fresh secret shown once, old one no longer signs
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/webhooks/{id}/rotate"),
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let new_secret = v["webhook"]["secret"].as_str().unwrap().to_string();
+    assert_ne!(new_secret, secret);
+
+    // remove
+    let (status, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/webhooks/{id}/remove"),
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, v) = call_json(
+        &t.app,
+        req(Method::GET, "/api/v1/webhooks", Some(&token), None),
+    )
+    .await;
+    assert_eq!(v["webhooks"].as_array().unwrap().len(), 1);
+
+    // removing the last one leaves zero; removing a bogus id 404s
+    let (_id2, _) = create_webhook(&t.app, &token, "https://x.example/h").await;
+    let _ = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/webhooks/{id}/remove"),
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn webhook_rejects_non_http_url() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            "/api/v1/webhooks",
+            Some(&token),
+            Some(json!({ "url": "file:///etc/hosts" })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"]["code"], "invalid_request");
+    assert!(v["error"]["message"].as_str().unwrap().contains("http(s)"));
+}
+
+#[tokio::test]
+async fn webhook_delivers_ready_signed_and_off_the_request_path() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+
+    // a slow receiver: the delivery must not block the sandbox from reaching
+    // ready. It sleeps 800 ms before answering.
+    let captured: std::sync::Arc<std::sync::Mutex<Vec<Received>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured2 = captured.clone();
+    let app = Router::new().route(
+        "/hook",
+        axum::routing::post(move |headers: axum::http::HeaderMap, body: String| {
+            let captured = captured2.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                captured.lock().unwrap().push(Received { headers, body });
+                StatusCode::OK
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let (_id, secret) = create_webhook(&t.app, &token, &format!("http://{addr}/hook")).await;
+
+    let started = Instant::now();
+    let (sandbox_id, _) = create_sandbox(&t.app, &token, json!({})).await;
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "a slow receiver delayed the sandbox reaching ready ({elapsed:?})"
+    );
+
+    // the delivery still arrives, signed, once the receiver finishes
+    let received = wait_for_delivery(&captured, 1).await;
+    assert_eq!(received.len(), 1, "expected exactly one ready delivery");
+    let recv = &received[0];
+    assert_eq!(recv.header("X-Ori-Event").as_deref(), Some("ready"));
+    assert_eq!(
+        recv.header("X-Ori-Delivery-Id")
+            .as_deref()
+            .map(|s| s.starts_with("oriwd_")),
+        Some(true)
+    );
+
+    let ts = recv
+        .header("X-Ori-Timestamp")
+        .expect("delivery must carry a timestamp for replay rejection");
+    let sig = recv
+        .header("X-Ori-Signature")
+        .expect("delivery must be HMAC-signed");
+    assert!(
+        signature_verifies(&secret, &ts, &recv.body, &sig),
+        "delivery signature must verify against the webhook secret"
+    );
+    let payload: Value = serde_json::from_str(&recv.body).unwrap();
+    assert_eq!(payload["event"], "ready");
+    assert_eq!(payload["id"], sandbox_id);
+    assert_eq!(payload["state"], "ready");
+    assert!(payload["occurredAt"].is_string());
+}
+
+#[tokio::test]
+async fn webhook_delivers_archived_on_delete() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (addr, captured) = spawn_receiver().await;
+    let (_id, secret) = create_webhook(&t.app, &token, &format!("http://{addr}/hook")).await;
+
+    let (sandbox_id, _) = create_sandbox(&t.app, &token, json!({})).await;
+    // drain the ready delivery so we can assert the archived one cleanly
+    let _ = wait_for_delivery(&captured, 1).await;
+    let (status, _) = call_json(
+        &t.app,
+        req(
+            Method::DELETE,
+            &format!("/api/v1/sandboxes/{sandbox_id}"),
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let received = wait_for_delivery(&captured, 2).await;
+    assert_eq!(received.len(), 2);
+    let archived = &received[1];
+    assert_eq!(archived.header("X-Ori-Event").as_deref(), Some("archived"));
+    let payload: Value = serde_json::from_str(&archived.body).unwrap();
+    assert_eq!(payload["id"], sandbox_id);
+    let ts = archived.header("X-Ori-Timestamp").unwrap();
+    let sig = archived.header("X-Ori-Signature").unwrap();
+    assert!(signature_verifies(&secret, &ts, &archived.body, &sig));
+}
+
+/// A dead endpoint must stop being retried instead of accumulating pending
+/// deliveries: the delivery is dropped after `max_attempts` and recorded as
+/// dropped. Retries are driven via the same sweeper the server runs.
+#[tokio::test]
+async fn webhook_dead_endpoint_is_dropped_not_accumulated() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+
+    // a port nothing listens on
+    let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = dead.local_addr().unwrap();
+    drop(dead);
+
+    let (id, _secret) = create_webhook(&t.app, &token, &format!("http://{addr}/hook")).await;
+    let (sandbox_id, _) = create_sandbox(&t.app, &token, json!({})).await;
+
+    // wait for the enqueued delivery row to exist
+    let mut delivery_id: Option<String> = None;
+    for _ in 0..100 {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM webhook_deliveries WHERE webhook_id = ? AND event = 'ready'",
+        )
+        .bind(&id)
+        .fetch_optional(&t.db)
+        .await
+        .unwrap();
+        if let Some((did,)) = row {
+            delivery_id = Some(did);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let delivery_id = delivery_id.expect("delivery row was never enqueued");
+
+    // drive the sweeper until the cap is reached (force-due between passes so
+    // the backoff does not slow the test)
+    let state = AppState {
+        db: t.db.clone(),
+        provider: t.provider.clone(),
+        config: Default::default(),
+        pool: None,
+        agents: ori_server::tunnel::AgentRegistry::new(),
+    };
+    for _ in 0..20 {
+        ori_server::routes::webhook::attempt_due_deliveries(&state).await;
+        let row: Option<(String, i64, i64)> = sqlx::query_as(
+            "SELECT status, attempts, max_attempts FROM webhook_deliveries WHERE id = ?",
+        )
+        .bind(&delivery_id)
+        .fetch_optional(&t.db)
+        .await
+        .unwrap();
+        if let Some((status, attempts, max)) = row {
+            if status == "dropped" {
+                assert_eq!(attempts, max, "dropped after the attempt cap");
+                break;
+            }
+            if attempts > 0 {
+                // make the scheduled retry due immediately
+                sqlx::query("UPDATE webhook_deliveries SET next_attempt_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+                    .bind(&delivery_id)
+                    .execute(&t.db)
+                    .await
+                    .unwrap();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let (status, attempts, dropped_at): (String, i64, String) =
+        sqlx::query_as("SELECT status, attempts, dropped_at FROM webhook_deliveries WHERE id = ?")
+            .bind(&delivery_id)
+            .fetch_one(&t.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        status, "dropped",
+        "dead endpoint must be dropped, not retried forever"
+    );
+    assert_eq!(attempts, 5, "exactly the attempt cap, no unbounded growth");
+    assert!(!dropped_at.is_empty(), "the drop must be recorded");
+
+    // exactly one delivery row for the whole retry saga — retries reuse the
+    // row rather than appending
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM webhook_deliveries WHERE webhook_id = ?")
+            .bind(&id)
+            .fetch_one(&t.db)
+            .await
+            .unwrap();
+    assert_eq!(count, 1, "retries must not accumulate pending deliveries");
+    // ...and the sandbox itself was unaffected
+    let (_, v) = sandbox_info(&t.app, &token, &sandbox_id).await;
+    assert_eq!(v["sandbox"]["state"], "ready");
+}
+
+// ---------------------------------------------------------------------------
+// data retention
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn data_retention_status_then_enable_skips_stop_snapshots() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+
+    // disabled by default
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::GET,
+            "/api/v1/account/data-retention",
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["enabled"], false);
+
+    // stop snapshots while disabled
+    let (id, _) = create_sandbox(&t.app, &token, json!({})).await;
+    let (status, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM snapshots WHERE sandbox_id = ?")
+        .bind(&id)
+        .fetch_one(&t.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "disabled retention snapshots on stop");
+
+    // enable (idempotent — second enable is a 200, not an error)
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            "/api/v1/account/data-retention",
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["enabled"], true);
+    let (status, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            "/api/v1/account/data-retention",
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, v) = call_json(
+        &t.app,
+        req(
+            Method::GET,
+            "/api/v1/account/data-retention",
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["enabled"], true);
+
+    // now stop snapshots the data away
+    let (id2, _) = create_sandbox(&t.app, &token, json!({})).await;
+    let (status, _) = call_json(
+        &t.app,
+        req(
+            Method::POST,
+            &format!("/api/v1/sandboxes/{id2}/stop"),
+            Some(&token),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM snapshots WHERE sandbox_id = ?")
+        .bind(&id2)
+        .fetch_one(&t.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "enabled retention must skip the stop snapshot");
+}
+
+#[tokio::test]
+async fn data_retention_is_per_account() {
+    let t = test_app().await;
+    let token = bootstrap_key(&t.app).await;
+    let (_, v) = call_json(
+        &t.app,
+        req(
+            Method::GET,
+            "/api/v1/account/data-retention",
+            Some(&token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(v["enabled"], false);
+}
+
+// ---------------------------------------------------------------------------
+// dashboard + self-update version
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn dashboard_serves_a_page_derived_from_config() {
+    let t = test_app().await;
+    let (status, body) = call(&t.app, req(Method::GET, "/dashboard", None, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("ori"));
+    assert!(
+        body.contains("ori.test"),
+        "dashboard must reflect the configured domain"
+    );
+}
+
+#[tokio::test]
+async fn cli_version_without_release_base_reports_up_to_date() {
+    let t = test_app().await;
+    let (status, v) = call_json(&t.app, req(Method::GET, "/api/v1/cli/version", None, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["current"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["latest"], v["current"]);
+    assert_eq!(v["channel"], "stable");
+    assert_eq!(v["updateAvailable"], false);
+    assert!(v["releaseBaseUrl"].is_null());
+}
+
+#[tokio::test]
+async fn cli_version_reads_the_latest_json_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    std::fs::write(
+        base.join("latest.json"),
+        r#"{"version":"99.1.0","channel":"stable","platforms":{}}"#,
+    )
+    .unwrap();
+
+    let db = db::open_in_memory().await.unwrap();
+    let provider = Arc::new(MockProvider::new());
+    let config = Config {
+        domain: "ori.test".to_string(),
+        release_base_url: Some(base.display().to_string()),
+        ..Config::default()
+    };
+    let app = ori_server::build_app(db.clone(), provider.clone(), config);
+
+    let (status, v) = call_json(&app, req(Method::GET, "/api/v1/cli/version", None, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["current"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["latest"], "99.1.0");
+    assert_eq!(v["updateAvailable"], true);
+    assert_eq!(v["releaseBaseUrl"], base.display().to_string());
+}

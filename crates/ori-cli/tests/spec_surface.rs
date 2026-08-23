@@ -202,18 +202,15 @@ fn agent_and_roles_are_listed() {
 
 #[test]
 fn unimplemented_commands_fail_cleanly() {
-    // C16 wired `extend`, `operation`, `api-key` and removed `limits`; these
-    // are the commands still stubbed in this build.
+    // C16 wired `extend`, `operation`, `api-key` and removed `limits`; C22
+    // wired `webhook`, `team`, `data-retention`, `dashboard`, `self-update`;
+    // C20 wired `snapshots` and the `snapshot` subcommands. These are the
+    // commands still stubbed in this build.
     for args in [
         vec!["ssh", "ori_x"],
         vec!["scp", "a:b", "c:d"],
         vec!["forward", "ori_x", "--remote", "3000"],
-        vec!["snapshots"],
-        vec!["snapshot", "tree", "snap1"],
         vec!["env", "list"],
-        vec!["webhook", "list"],
-        vec!["team", "list"],
-        vec!["data-retention", "status"],
         vec!["prompt"],
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_ori"))

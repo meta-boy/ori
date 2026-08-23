@@ -99,6 +99,13 @@ impl Api {
         })
     }
 
+    /// `GET` returning the raw response for a caller that consumes the body as
+    /// a stream (`snapshot pull`). The status is checked here, so a 4xx/5xx
+    /// still becomes an `ApiError` with the server's reason.
+    pub async fn get(&self, path: &str) -> Result<Response, CliError> {
+        self.send(Method::GET, path, None).await
+    }
+
     pub async fn post_json<T: DeserializeOwned>(
         &self,
         path: &str,

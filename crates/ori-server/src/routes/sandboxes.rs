@@ -230,6 +230,7 @@ async fn run_create(
         Err(e) => {
             tracing::warn!(sandbox = %id, error = %e, "create: provider create failed");
             let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
+            crate::routes::webhook::emit(&state, &id, "error").await;
             let _ = emit(
                 &tx,
                 StreamEvent::Error {
@@ -310,6 +311,7 @@ async fn finish_ready(
             commands: commands_for(id),
         },
     );
+    crate::routes::webhook::emit(state, id, "ready").await;
 }
 
 /// Insert the sandbox row, retrying on a slug collision. The uniqueness
@@ -457,7 +459,9 @@ pub async fn stop_sandbox(
         let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
         return Err(ApiError::provider_unavailable(e.to_string()));
     }
-    if !force {
+    // `--force` and delete-on-stop (data retention) both skip the snapshot:
+    // with retention enabled there is deliberately nothing to restore from.
+    if !force && !crate::routes::data_retention::retention_enabled(&state, &row.account_id).await {
         if let Ok(snap) = state
             .provider
             .snapshot(&handle, &crate::util::snapshot_name("stop"))
@@ -546,6 +550,7 @@ async fn run_resume(
         // wired up in this build, so the honest answer is an error.
         tracing::warn!(sandbox = %id, error = %e, "resume: provider start failed");
         let _ = repo::set_state(&state.db, &id, BoxState::Error).await;
+        crate::routes::webhook::emit(&state, &id, "error").await;
         let _ = emit(
             &tx,
             StreamEvent::Error {
@@ -612,6 +617,7 @@ async fn run_resume(
             commands: commands_for(&id),
         },
     );
+    crate::routes::webhook::emit(&state, &id, "ready").await;
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +781,7 @@ async fn run_fork(
             if source_running {
                 if req.no_stop.unwrap_or(false) {
                     let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+                    crate::routes::webhook::emit(&state, &child_id, "error").await;
                     let _ = emit(
                         &tx,
                         StreamEvent::Error {
@@ -795,6 +802,7 @@ async fn run_fork(
                     Ok(s) => s,
                     Err((code, message)) => {
                         let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+                        crate::routes::webhook::emit(&state, &child_id, "error").await;
                         let _ = emit(
                             &tx,
                             StreamEvent::Error {
@@ -854,6 +862,7 @@ async fn run_fork(
         Err(e) => {
             tracing::warn!(sandbox = %child_id, error = %e, "fork: clone_from failed");
             let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+            crate::routes::webhook::emit(&state, &child_id, "error").await;
             let _ = emit(
                 &tx,
                 StreamEvent::Error {
@@ -873,6 +882,7 @@ async fn run_fork(
     if let Err(e) = state.provider.start(&handle).await {
         tracing::warn!(sandbox = %child_id, error = %e, "fork: start clone failed");
         let _ = repo::set_state(&state.db, &child_id, BoxState::Error).await;
+        crate::routes::webhook::emit(&state, &child_id, "error").await;
         let _ = emit(
             &tx,
             StreamEvent::Error {
@@ -930,6 +940,7 @@ async fn run_fork(
             commands: commands_for(&child_id),
         },
     );
+    crate::routes::webhook::emit(&state, &child_id, "ready").await;
 }
 
 /// C24: the common path — create, work, fork. A running source that has never

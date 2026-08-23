@@ -23,7 +23,13 @@ bytes = "1"
 hex = "0.4"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+hmac = { version = "0.12", features = ["std"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+hmac = { version = "0.12", features = ["std"] }
+sha2 = "0.10"
+tempfile = "3"

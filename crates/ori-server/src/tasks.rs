@@ -51,26 +51,31 @@ pub async fn reap_expired(state: &AppState) -> ApiResult<()> {
         // a reaped sandbox carries a fast-cloneable stopped snapshot for fork.
         match state.provider.stop(&handle, StopMode::Force).await {
             Ok(()) => {
-                if let Ok(snap) = state
-                    .provider
-                    .snapshot(&handle, &crate::util::snapshot_name("ttl"))
-                    .await
-                {
-                    let _ = repo::insert_snapshot(
-                        &state.db,
-                        &row.account_id,
-                        &row.id,
-                        "ttl",
-                        &snap.name,
-                        true,
-                    )
-                    .await;
+                // delete-on-stop (data retention): skip the snapshot, leaving
+                // nothing to restore from — exactly what the toggle promises
+                if !crate::routes::data_retention::retention_enabled(state, &row.account_id).await {
+                    if let Ok(snap) = state
+                        .provider
+                        .snapshot(&handle, &crate::util::snapshot_name("ttl"))
+                        .await
+                    {
+                        let _ = repo::insert_snapshot(
+                            &state.db,
+                            &row.account_id,
+                            &row.id,
+                            "ttl",
+                            &snap.name,
+                            true,
+                        )
+                        .await;
+                    }
                 }
                 repo::set_state(&state.db, &row.id, BoxState::Stopped).await?;
             }
             Err(e) => {
                 tracing::warn!(sandbox = %row.id, error = %e, "reaper stop failed");
                 repo::set_state(&state.db, &row.id, BoxState::Error).await?;
+                crate::routes::webhook::emit(state, &row.id, "error").await;
             }
         }
     }
@@ -105,6 +110,7 @@ pub async fn reconcile_once(state: &AppState) -> ApiResult<()> {
                 BoxState::Error,
             )
             .await;
+            crate::routes::webhook::emit(state, &row.id, "error").await;
         }
     }
 

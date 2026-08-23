@@ -36,7 +36,16 @@ pub async fn new(args: NewArgs, ctx: &Ctx) -> Result<(), CliError> {
         setup_script,
         environment: args.environment.clone(),
         from_snapshot: args.from.clone(),
-        team: args.team.clone(),
+        // Billing scope priority: explicit `--team` wins; `--personal`
+        // overrides for this one command; otherwise the sticky team set by
+        // `ori team switch` applies to every `new`.
+        team: args.team.clone().or_else(|| {
+            if args.personal {
+                None
+            } else {
+                ctx.config.team.clone()
+            }
+        }),
         personal: args.personal,
         no_stop: false,
     };

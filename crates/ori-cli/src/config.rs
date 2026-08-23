@@ -21,6 +21,9 @@ pub struct Config {
     pub token: Option<String>,
     pub api_url: Option<String>,
     pub channel: String,
+    /// Sticky billing scope set by `ori team switch`. Applies to every
+    /// subsequent `ori new` unless overridden by `--team` or `--personal`.
+    pub team: Option<String>,
 }
 
 impl Default for Config {
@@ -29,6 +32,7 @@ impl Default for Config {
             token: None,
             api_url: None,
             channel: "stable".to_string(),
+            team: None,
         }
     }
 }
@@ -98,6 +102,7 @@ mod tests {
             token: Some("tok".into()),
             api_url: None,
             channel: "stable".into(),
+            team: Some("personal".into()),
         };
         cfg.save(Some(&path)).unwrap();
 
@@ -107,6 +112,7 @@ mod tests {
         let loaded = Config::load(Some(&path)).unwrap();
         assert_eq!(loaded.token.as_deref(), Some("tok"));
         assert_eq!(loaded.channel, "stable");
+        assert_eq!(loaded.team.as_deref(), Some("personal"));
     }
 
     #[test]
