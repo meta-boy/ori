@@ -145,8 +145,11 @@ What it does, in order:
    `target/release/ori-agent`; otherwise it warns and the pool injects it at
    claim), **docker** (storage driver `overlayfs`, verified with
    `docker run hello-world`), **git**, a non-root **`work`** user in the
-   docker group, and a **VNC/desktop stack** (xfce4 + x11vnc) for
-   `ori desktop` parity
+docker group, and a **VNC/desktop stack** — `Xvfb -> x11vnc ->
+   websockify -> noVNC`, all loopback-only, started at boot — for
+   `ori desktop` parity (see `image/README.md` for the stack, the
+   noVNC-vs-KasmVNC decision, the fluxbox window-manager choice, and the
+   image-size cost)
 4. **stop the container, then snapshot `base`** — clone timings
    (1.65-1.83 s) are only valid from a stopped, clean golden; cloning a
    running or recently-rolled-back source measured 44 s and is a different,
@@ -176,8 +179,12 @@ bash scripts/golden-clone-check.sh --vmid 9500
 
 Clones `pct clone <golden> <sandbox> --full 0 --snapname base` into a scratch
 vmid in the test range, starts it, and verifies DHCP, sshd (loopback only),
-docker (runs hello-world), git, and the `work` user. The scratch clone is
-destroyed on the way out — including on failure.
+docker (runs hello-world), git, and the `work` user. When the golden ships the
+desktop stack it also proves, the way a browser will use it: **X is up**
+(`/tmp/.X11-unix/X99`), `fluxbox` is running, `x11vnc` and `websockify` listen
+on loopback **only**, and `websockify` completes a WebSocket handshake against
+the VNC backend (`image/wscheck.py`). The scratch clone is destroyed on the way
+out — including on failure.
 
 Expectation: clone **< 2 s** on an idle host (measured 1.65-1.83 s;
 idle-path sample 1.42 s — see the recorded runs), and start → exec-ready in
@@ -257,6 +264,12 @@ preflight OK: host is fit for ori serve
 ```
 
 ### `scripts/golden-build.sh --template ubuntu --vmid 9500` (default tier)
+
+> The runs below predate `plans/C18-desktop.md`, which replaced the best-effort
+> `xfce4 + x11vnc` install with the loopback-only `Xvfb -> x11vnc -> websockify
+> -> noVNC` stack and its boot service. The C18 rebuild of both goldens added
+> **~443 MB (ubuntu) / ~428 MB (alpine)** to the rootfs, verified in-build and
+> on real clones — see `image/README.md` for the numbers and decisions.
 
 ```
 existing golden 9500 is ours; rebuilding cleanly

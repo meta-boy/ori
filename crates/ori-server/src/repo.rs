@@ -108,7 +108,7 @@ pub async fn insert_sandbox(db: &SqlitePool, s: &NewSandbox) -> Result<(), sqlx:
     sqlx::query(
         "INSERT INTO sandboxes (id, account_id, name, state, machine_type, slug, provider, \
          provider_handle, environment, environment_version, no_env, created_at, updated_at, \
-         stop_after, team) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         stop_after, team, agent_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&s.id)
     .bind(&s.account_id)
@@ -125,6 +125,9 @@ pub async fn insert_sandbox(db: &SqlitePool, s: &NewSandbox) -> Result<(), sqlx:
     .bind(&now)
     .bind(&s.stop_after)
     .bind(&s.team)
+    // Minted per sandbox so the agent has a credential that is not the
+    // account key: anything running inside the sandbox can read it.
+    .bind(crate::tunnel::new_agent_token())
     .execute(db)
     .await?;
     Ok(())

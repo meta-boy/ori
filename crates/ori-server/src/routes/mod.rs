@@ -64,6 +64,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/cli/login/:id/approve", post(login::login_approve))
         .route("/api/v1/cli/login/poll/:id", get(login::login_poll))
         .route("/api/v1/cli/version", get(login::cli_version))
+        // the agent tunnel authenticates with a per-sandbox token, not an
+        // account key, so it sits outside the bearer middleware
+        .route("/api/v1/agent/tunnel", get(crate::tunnel::agent_tunnel))
         // key creation lives outside the middleware: it is the bootstrap path
         // and checks the bearer token itself when one is present
         .route("/api/v1/api-keys", post(account::create_api_key))

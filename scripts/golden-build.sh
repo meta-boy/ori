@@ -410,6 +410,8 @@ UNIT
 name="ori-desktop"
 description="ori desktop stack (Xvfb -> x11vnc -> websockify -> noVNC)"
 command="/usr/local/sbin/ori-desktop"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
 depend() { need net; }
 INIT
     chmod 0755 /etc/init.d/ori-desktop

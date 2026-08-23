@@ -18,9 +18,9 @@ use crate::ndjson::ndjson_response;
 use crate::pool::{ClaimResult, PoolKey};
 use crate::proto::{
     BoxState, Commands, CreateSandboxRequest, ExecRequest, ExecRequestBody, ExecResponse,
-    ExtendSandboxRequest, ForkSandboxRequest, InstanceHandle, InstanceSpec, MachineType, PageInfo,
-    ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, SnapshotRef, StopMode,
-    StopSandboxRequest, StreamEvent, TypedId,
+    ExecResult, ExtendSandboxRequest, ForkSandboxRequest, InstanceHandle, InstanceSpec,
+    MachineType, PageInfo, ResumeSandboxRequest, Sandbox, SandboxDetail, SandboxList, SnapshotRef,
+    StopMode, StopSandboxRequest, StreamEvent, TypedId,
 };
 use crate::repo::{self, SandboxRow};
 use crate::slug;
@@ -984,11 +984,41 @@ pub async fn exec_sandbox(
         provider: row.provider.clone(),
         id: row.provider_handle.clone(),
     };
-    let result = state
-        .provider
-        .exec(&handle, &exec_req)
-        .await
-        .map_err(|e| ApiError::provider_unavailable(e.to_string()))?;
+
+    // Prefer the agent tunnel: it is a persistent connection, where the
+    // provider path pays an SSH handshake on every call. `None` means this
+    // sandbox has no live tunnel, which is a fallback signal and not an error —
+    // the response shape is identical either way, so a caller can only tell by
+    // latency.
+    let tunnelled = state
+        .agents
+        .exec(
+            &id,
+            &exec_req.cmd,
+            exec_req.cwd.as_deref(),
+            exec_req.timeout_secs,
+            false,
+        )
+        .await;
+
+    let result = match tunnelled {
+        Some(frame) => {
+            let g = |k: &str| frame.get(k).cloned().unwrap_or(serde_json::Value::Null);
+            ExecResult {
+                pid: g("pid").as_i64().unwrap_or(0),
+                completed: g("completed").as_bool().unwrap_or(false),
+                exit_code: g("exitCode").as_i64().unwrap_or(-1),
+                stdout: g("stdout").as_str().unwrap_or_default().to_string(),
+                stderr: g("stderr").as_str().unwrap_or_default().to_string(),
+                duration_ms: g("durationMs").as_i64().unwrap_or(0),
+            }
+        }
+        None => state
+            .provider
+            .exec(&handle, &exec_req)
+            .await
+            .map_err(|e| ApiError::provider_unavailable(e.to_string()))?,
+    };
 
     let process_id = TypedId::process().to_string();
     let started = now_ts();

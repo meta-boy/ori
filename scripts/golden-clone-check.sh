@@ -102,11 +102,18 @@ ip=$(pve_ssh "pct exec $CLONE -- sh -c 'ip addr show dev eth0 2>/dev/null || ifc
   | grep -oE 'inet [0-9.]+' | awk '{print $2}' | grep -v '^127\.' | head -1 || true)
 [ -n "$ip" ] && echo "  [ok] DHCP address: $ip" || { echo "  [fail] no DHCP address"; fail=1; }
 
-sshd_running=$(pve_ssh "pct exec $CLONE -- sh -c 'pgrep -x sshd >/dev/null && echo yes || echo no'" 2>/dev/null || true)
+if [ "$TIER" = "alpine" ]; then
+  # busybox pgrep -x fails for sshd because sshd renames its argv to
+  # "sshd: /usr/sbin/sshd [listener]..."; netstat is the positive proof
+  # (C15 "Verified facts about the golden image" -- prefer a positive test).
+  sshd_running=$(pve_ssh "pct exec $CLONE -- sh -c 'netstat -tln 2>/dev/null | grep -q \":22 \" && echo yes || echo no'" 2>/dev/null || true)
+else
+  sshd_running=$(pve_ssh "pct exec $CLONE -- sh -c 'pgrep -x sshd >/dev/null && echo yes || echo no'" 2>/dev/null || true)
+fi
 [ "$sshd_running" = "yes" ] && echo "  [ok] sshd running" || { echo "  [fail] sshd not running"; fail=1; }
 
 if [ "$TIER" = "alpine" ]; then
-  lb=$(pve_ssh "pct exec $CLONE -- sh -c 'grep -c ListenAddress /etc/ssh/sshd_config.d/10-ori-loopback.conf'" 2>/dev/null || true)
+  lb=$(pve_ssh "pct exec $CLONE -- sh -c 'netstat -tln 2>/dev/null | grep -cE \"(127.0.0.1|::1):22 \"'" 2>/dev/null || true)
 else
   lb=$(pve_ssh "pct exec $CLONE -- sh -c 'ss -tln 2>/dev/null | grep -cE \"127.0.0.1|\[::1\]\".*:22'" 2>/dev/null || true)
 fi
@@ -172,7 +179,7 @@ if [ "$desktop_present" = "yes" ]; then
   WSCHECK_B64=$(base64 < "$ORI_SCRIPT_DIR/../image/wscheck.py" | tr -d '\n')
   ws_out=$(pve_ssh "pct exec $CLONE -- sh -c 'echo $WSCHECK_B64 | base64 -d > /tmp/wscheck.py && python3 /tmp/wscheck.py'" 2>/dev/null || true)
   if printf '%s' "$ws_out" | grep -q 'websocket-handshake OK'; then
-    echo "  [ok] websockify WebSocket handshake: $(printf '%s' "$ws_out" | grep -o 'HTTP/1.1 101.*' | head -1)"
+    echo "  [ok] websockify WebSocket handshake: $(printf '%s' "$ws_out" | grep -oE 'HTTP/1\.1 101[^)]*' | head -1)"
   else
     echo "  [fail] websockify WebSocket handshake failed: $ws_out"; fail=1
   fi

@@ -17,6 +17,7 @@ pub mod routes;
 pub mod slug;
 pub mod state;
 pub mod tasks;
+pub mod tunnel;
 pub mod util;
 
 use std::sync::Arc;
@@ -55,6 +56,7 @@ pub fn build_app(db: SqlitePool, provider: Arc<dyn Provider>, config: Config) ->
         provider,
         config: Arc::new(config),
         pool,
+        agents: crate::tunnel::AgentRegistry::new(),
     };
     routes::router(state)
 }
@@ -73,6 +75,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         provider,
         config: Arc::new(config.clone()),
         pool,
+        agents: crate::tunnel::AgentRegistry::new(),
     };
 
     // Register the configured golden snapshot before the pool does anything.

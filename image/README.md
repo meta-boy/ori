@@ -100,18 +100,16 @@ build, so the delta is the honest marginal cost of the desktop.
 
 | tier | rootfs before desktop | after desktop | delta |
 |---|---|---|---|
-| ubuntu (9500) | filled from the build below | … | **+…** |
-| alpine (9501) | filled from the build below | … | **+…** |
+| ubuntu (9500) | 1,268,044 KiB (~1.24 GB) | 1,721,820 KiB (~1.68 GB) | **+453,776 KiB (~443 MB)** |
+| alpine (9501) | 312,088 KiB (~305 MB) | 750,748 KiB (~733 MB) | **+438,660 KiB (~428 MB)** |
 
-> The exact before/after numbers for the current goldens (9500/9501) are
-> recorded in `infra/README.md` (recorded timed runs) and printed by
-> `golden-build.sh` on every run as `desktop rootfs: before=… after=… delta=…`.
-> Update this table when the stack changes.
-
-The bulk is X + fontconfig + the `websockify` Python stack (it pulls
-`python3-numpy`/`libgfortran` on alpine, and the Xorg client libs on both).
-The biggest single lever left is the window manager choice already made above;
-`--no-desktop` skips the whole block if an operator wants the lean tier.
+Measured 2026-08-23 on the rebuilt goldens (`du -xsk /` inside the container,
+before vs after the desktop block — reproduced on every `golden-build.sh` run
+as `desktop rootfs: before=… after=… delta=…`). The bulk is X + fontconfig +
+the `websockify` Python stack (it pulls `python3-numpy`/`libgfortran` on
+alpine, and the Xorg client libs on both). The biggest single lever left is
+the window-manager choice already made above; `--no-desktop` skips the whole
+block if an operator wants the lean tier.
 
 ## noVNC assets — pinned, checksummed
 
