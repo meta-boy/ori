@@ -73,12 +73,22 @@ impl Harness {
             .expect("streamClose must not error");
     }
 
-    /// Collect every chunk for one stream id plus the terminal close code,
-    /// until a quiet moment or the channels close.
+    /// Collect every chunk for one stream id plus the terminal close code.
+    ///
+    /// Terminates on the close frame, which is the actual end of the stream.
+    /// It used to stop after 200 ms of silence, which is not the same thing: a
+    /// directory read spawns `tar -cf -`, and fork+exec on a loaded machine can
+    /// take longer than that to produce a first byte. The test then saw zero
+    /// tar bytes and failed while the code was entirely correct -- it passes in
+    /// 0.4 s on a developer laptop and failed on a shared CI runner.
+    ///
+    /// The overall timeout is a deadlock guard, not the normal exit path.
     async fn drain_stream(&mut self, id: StreamId) -> (Vec<u8>, Option<u16>) {
         let mut bytes = Vec::new();
         let mut close = None;
-        loop {
+        let overall = tokio::time::sleep(Duration::from_secs(30));
+        tokio::pin!(overall);
+        while close.is_none() {
             tokio::select! {
                 f = self.bin_rx.recv() => match f {
                     Some(f) if f.id == id => bytes.extend_from_slice(&f.bytes),
@@ -90,10 +100,41 @@ impl Harness {
                     Some(_) => {}
                     None => break,
                 },
-                _ = tokio::time::sleep(Duration::from_millis(200)) => break,
+                _ = &mut overall => break,
+            }
+        }
+        // Data frames and close arrive on separate channels, so chunks may
+        // already be queued behind the close we just observed.
+        while let Ok(f) = self.bin_rx.try_recv() {
+            if f.id == id {
+                bytes.extend_from_slice(&f.bytes);
             }
         }
         (bytes, close)
+    }
+
+    /// Collect at least `want` bytes for a stream that stays open.
+    ///
+    /// A TCP relay never sends a close, so there is no terminal frame to wait
+    /// for. Waiting for a byte count is still deterministic; stopping after a
+    /// fixed quiet period is not -- if the echo took longer than the window to
+    /// make its first hop this returned empty and the assertion failed on a
+    /// slow machine rather than on a real bug.
+    async fn drain_at_least(&mut self, id: StreamId, want: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let overall = tokio::time::sleep(Duration::from_secs(30));
+        tokio::pin!(overall);
+        while bytes.len() < want {
+            tokio::select! {
+                f = self.bin_rx.recv() => match f {
+                    Some(f) if f.id == id => bytes.extend_from_slice(&f.bytes),
+                    Some(_) => {}
+                    None => break,
+                },
+                _ = &mut overall => break,
+            }
+        }
+        bytes
     }
 
     /// The next `streamClose` for `id`, or `None` if it never comes.
@@ -147,10 +188,9 @@ async fn tcp_relay_echoes_both_ways() {
     h.streams
         .route_data(id, b"hello over the tunnel".to_vec())
         .await;
-    let (bytes, _close) = tokio::time::timeout(Duration::from_secs(5), h.drain_stream(id))
-        .await
-        .expect("echo never arrived");
-    assert_eq!(bytes, b"hello over the tunnel");
+    let want = b"hello over the tunnel";
+    let bytes = h.drain_at_least(id, want.len()).await;
+    assert_eq!(bytes, want, "echo never arrived");
 
     // The stream stays open until either side closes it; the plane closes and
     // the agent acks cleanly.
