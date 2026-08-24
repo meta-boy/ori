@@ -1733,7 +1733,10 @@ async fn ndjson_is_flushed_per_line_not_buffered() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let db = db::open_in_memory().await.unwrap();
-    let provider = Arc::new(MockProvider::new().with_create_delay(Duration::from_millis(1200)));
+    // `created` and `state` are emitted before `create` is called, so this delay
+    // sits *between* the first line and the last one. That gap is the signal.
+    const CREATE_DELAY: Duration = Duration::from_millis(1200);
+    let provider = Arc::new(MockProvider::new().with_create_delay(CREATE_DELAY));
     let config = Config {
         domain: "ori.test".into(),
         webhook_allow_private: true,
@@ -1789,12 +1792,29 @@ async fn ndjson_is_flushed_per_line_not_buffered() {
         }
     }
     let first_line_at = first_line_at.expect("first NDJSON line never arrived");
-    // The mock delays `create` by 1200ms; the first lines (created, state)
-    // are emitted before create is called. A buffered response would deliver
-    // nothing until >= 1200ms. Give generous slack for the local socket.
+    let stream_ended_at = started.elapsed();
+
+    // Measure the GAP between the first line and the end of the stream, not the
+    // absolute time to the first line.
+    //
+    // The absolute form asserted `first_line_at < 1000ms` against a 1200ms
+    // create delay, leaving 200ms of headroom for connect + write + routing. On
+    // a slower runner the first line took 1331ms and the test failed while the
+    // stream was in fact perfectly incremental -- the machine was slower than
+    // the very delay the assertion depended on, so it could no longer tell
+    // streamed from buffered at all.
+    //
+    // The gap inverts that dependency. `create` sleeps between the first line
+    // and the last, so a streaming response separates them by roughly
+    // CREATE_DELAY while a buffered one delivers everything at once and
+    // collapses the gap to ~0. A slow machine makes the gap *wider*, which
+    // strengthens the assertion instead of breaking it.
+    let gap = stream_ended_at.saturating_sub(first_line_at);
     assert!(
-        first_line_at < Duration::from_millis(1000),
-        "first line arrived after {first_line_at:?} — the stream was buffered"
+        gap >= CREATE_DELAY / 2,
+        "first line at {first_line_at:?}, stream ended at {stream_ended_at:?} \
+         — only {gap:?} apart, so the response was buffered rather than \
+         flushed per line"
     );
 
     // the whole stream has the expected events in order (body only — the raw
