@@ -114,7 +114,11 @@ jobs:
         id: version
         shell: bash
         run: |
-          echo "value=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == \"ori-cli\") | .version')" >> "$GITHUB_OUTPUT"
+          # No backslashes: inside a YAML block scalar the content is literal, so
+          # bash passes \" straight to jq, which then errors and yields an empty
+          # version. That is how v0.1.1 shipped `ori--<target>.tar.gz` and a
+          # latest.json with "version": "".
+          echo "value=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ori-cli") | .version')" >> "$GITHUB_OUTPUT"
 
       - name: Stage tarball
         shell: bash
@@ -149,7 +153,11 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          echo "value=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == \"ori-cli\") | .version')" >> "$GITHUB_OUTPUT"
+          # No backslashes: inside a YAML block scalar the content is literal, so
+          # bash passes \" straight to jq, which then errors and yields an empty
+          # version. That is how v0.1.1 shipped `ori--<target>.tar.gz` and a
+          # latest.json with "version": "".
+          echo "value=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ori-cli") | .version')" >> "$GITHUB_OUTPUT"
 
       - name: Write sha256sums.txt + latest.json
         shell: bash
