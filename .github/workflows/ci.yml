@@ -21,10 +21,14 @@ jobs:
   # -------------------------------------------------------------------------
   check:
     name: fmt / clippy / test
-    runs-on: ubuntu-latest
+    # Self-hosted (LXC, 4 cores / 6 GB / 48 GB). This job runs on every push and
+    # is the slow one; the runner keeps a warm ~/.cargo and target/ between runs.
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
+      # rustup is preinstalled on the self-hosted runner (the `runner` user has
+      # no sudo). These commands are idempotent, so they work on both.
       - name: Install stable toolchain
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
@@ -58,7 +62,7 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-14
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: [self-hosted, Linux, X64]
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
     env:
@@ -77,15 +81,17 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         uses: docker/setup-qemu-action@v3
 
+      # Only the foreign architecture needs cross (and therefore Docker).
+      # x86_64 musl builds natively on the self-hosted Linux runner.
       - name: Install cross
-        if: contains(matrix.target, 'unknown-linux')
+        if: matrix.target == 'aarch64-unknown-linux-musl'
         run: cargo install cross --locked
 
       - name: Build
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ matrix.target }}" == *unknown-linux* ]]; then
+          if [[ "${{ matrix.target }}" == aarch64-unknown-linux-musl ]]; then
             cross build --release --locked --target "${{ matrix.target }}" -p ori-cli --bin ori
           else
             cargo build --release --locked --target "${{ matrix.target }}" -p ori-cli --bin ori
@@ -205,10 +211,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          # --repo is required: this job only downloads the dist artifact and
+          # never checks out, so there is no .git for gh to infer the repo from.
+          # Without it both commands die on "not a git repository" -- which is
+          # exactly how v0.1.0 built all four targets and published nothing.
           gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "ori $TAG" \
             --generate-notes \
             dist/ori-*.tar.gz \
             dist/sha256sums.txt \
             dist/latest.json \
-            || gh release upload "$TAG" dist/ori-*.tar.gz dist/sha256sums.txt dist/latest.json --clobber
+            || gh release upload "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              dist/ori-*.tar.gz dist/sha256sums.txt dist/latest.json --clobber
