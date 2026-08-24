@@ -159,6 +159,13 @@ jobs:
           # latest.json with "version": "".
           echo "value=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ori-cli") | .version')" >> "$GITHUB_OUTPUT"
 
+      # `ori self-update` fetches {release_base_url}/install.sh and pipes it to
+      # bash, so the installer has to be a release asset too -- otherwise
+      # pointing ORI_RELEASE_BASE_URL at a GitHub release 404s on install.sh.
+      # The publish job has no checkout, so it is staged here.
+      - name: Stage install.sh alongside the artifacts
+        run: cp install.sh dist/install.sh
+
       - name: Write sha256sums.txt + latest.json
         shell: bash
         run: |
@@ -230,6 +237,7 @@ jobs:
             dist/ori-*.tar.gz \
             dist/sha256sums.txt \
             dist/latest.json \
+            dist/install.sh \
             || gh release upload "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              dist/ori-*.tar.gz dist/sha256sums.txt dist/latest.json --clobber
+              dist/ori-*.tar.gz dist/sha256sums.txt dist/latest.json dist/install.sh --clobber

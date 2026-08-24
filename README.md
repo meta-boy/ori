@@ -39,6 +39,82 @@ One binary, three roles:
 | `ori serve` | control plane | the backend you host |
 | `ori agent` | guest agent | inside each sandbox (Linux only) |
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/meta-boy/ori/main/install.sh | \
+  ORI_INSTALL_BASE_URL=https://github.com/meta-boy/ori/releases/latest/download bash
+```
+
+Installs to `$HOME/.local/bin` — **no sudo**. If that is not on your PATH, the
+installer tells you and prints the line to add:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The installer detects your OS and architecture, reads `latest.json` from the
+release, and **verifies the SHA-256 before writing anything**. It is safe to
+re-run — it reports `already up to date` rather than reinstalling — and it
+refuses to downgrade or cross a release channel unless you pass `--yes`.
+
+| env | flag | |
+|---|---|---|
+| `ORI_INSTALL_DIR` | `--dir PATH` | install directory (default `$HOME/.local/bin`) |
+| `ORI_INSTALL_VERSION` | `--version X` | pin a version (default `latest`) |
+| `ORI_INSTALL_BASE_URL` | `--base-url URL` | release base, or a local `dist/` directory |
+| `ORI_INSTALL_FORCE=1` | `--yes` | allow downgrade, channel jump, or overwrite |
+
+Pin a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/meta-boy/ori/main/install.sh | \
+  ORI_INSTALL_BASE_URL=https://github.com/meta-boy/ori/releases/download/v0.1.1 \
+  ORI_INSTALL_VERSION=0.1.1 bash
+```
+
+Prebuilt targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl`. The Linux builds are
+static musl, so the `agent` role drops into any image.
+
+Prefer to do it by hand? Every release carries `sha256sums.txt`:
+
+```bash
+BASE=https://github.com/meta-boy/ori/releases/latest/download
+curl -fsSLO "$BASE/ori-0.1.1-aarch64-apple-darwin.tar.gz"
+curl -fsSLO "$BASE/sha256sums.txt"
+shasum -a 256 -c sha256sums.txt --ignore-missing   # sha256sum -c on Linux
+tar xzf ori-0.1.1-aarch64-apple-darwin.tar.gz      # -> ./ori
+```
+
+Or build it: `cargo build --release` produces one binary at `target/release/ori`.
+
+### Upgrading
+
+Re-running the installer is the simplest upgrade, and does nothing if you are
+current:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/meta-boy/ori/main/install.sh | \
+  ORI_INSTALL_BASE_URL=https://github.com/meta-boy/ori/releases/latest/download bash
+```
+
+If you run a control plane, the CLI can update itself:
+
+```bash
+ori self-update          # prompts before applying
+ori self-update --yes    # no prompt
+```
+
+> `self-update` asks **your control plane** where releases live — it calls
+> `GET /api/v1/cli/version`, which returns the server's `ORI_RELEASE_BASE_URL`.
+> So it needs a reachable `ori serve` started with that variable set, for
+> example
+> `ORI_RELEASE_BASE_URL=https://github.com/meta-boy/ori/releases/latest/download`.
+> Without one it exits with a network error against the configured api-url — use
+> the `curl` form above instead. It then runs the same `install.sh`, so the
+> checksum and no-downgrade guarantees are identical.
+
 ## Status
 
 The command surface is **complete** — no stubs, no `unimplemented!()` in
@@ -112,6 +188,17 @@ permission bits.
 nothing about what a sandbox can route to, and the loopback case fails silently —
 the machine comes up, the agent never connects, and every `exec` quietly takes
 the slow path.
+
+To let clients run `ori self-update`, tell the server where releases live:
+
+```bash
+ORI_RELEASE_BASE_URL=https://github.com/meta-boy/ori/releases/latest/download
+```
+
+Leave it unset and `self-update` still reports correctly when you are current,
+but the moment a newer version exists it fails with *"an update to X is
+available but the control plane did not provide a release base URL"* — it has
+nowhere to fetch from.
 
 Turn on the warm pool to make `new` fast:
 
